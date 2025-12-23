@@ -1,5 +1,12 @@
 #![deny(missing_docs)]
-//! Dummy doc
+//! CryptoTensors Python bindings
+//!
+//! MODIFIED: Added encryption/decryption support for safetensors format.
+//! This is a derivative work based on the safetensors project by Hugging Face Inc.
+//! Modifications include:
+//! - Added `config` parameter to serialize/serialize_file for encryption
+//! - Added CryptoTensors integration for transparent decryption
+//! - Added KeyMaterial and AccessPolicy parsing from Python dicts
 use memmap2::{Mmap, MmapOptions};
 use pyo3::exceptions::{PyException, PyFileNotFoundError};
 use pyo3::prelude::*;
@@ -18,6 +25,11 @@ use std::ops::Bound;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
+
+// MODIFIED: CryptoTensors imports for encryption/decryption support
+use safetensors::cryptotensors::{SerializeCryptoConfig, CryptoTensors};
+use safetensors::key::KeyMaterial;
+use safetensors::policy::AccessPolicy;
 
 static TORCH_MODULE: OnceLock<Py<PyModule>> = OnceLock::new();
 static NUMPY_MODULE: OnceLock<Py<PyModule>> = OnceLock::new();
@@ -110,31 +122,51 @@ fn prepare(tensor_dict: HashMap<String, PyBound<PyDict>>) -> PyResult<HashMap<St
 
 /// Serializes raw data.
 ///
+/// MODIFIED: Added `config` parameter for encryption support.
+///
 /// Args:
 ///     tensor_dict (`Dict[str, Dict[Any]]`):
 ///         The tensor dict is like:
 ///             {"tensor_name": {"dtype": "F32", "shape": [2, 3], "data": b"\0\0"}}
 ///     metadata (`Dict[str, str]`, *optional*):
 ///         The optional purely text annotations
+///     config (`Dict[str, Any]`, *optional*):
+///         Encryption configuration, structure as follows:
+///             {
+///                 "tensors": ["tensor1", "tensor2"],  # List of tensor names to encrypt; if None, encrypt all
+///                 "enc_key": {  # Encryption key, supports JWK format
+///                     "alg": "aes256gcm", "kid": "test-enc-key", "key": "..."
+///                 },
+///                 "sign_key": {  # Signing key, supports Ed25519, etc.
+///                     "alg": "ed25519", "kid": "test-sign-key", "private": "...", "public": "..."
+///                 },
+///                 "policy": {  # Optional, load policy
+///                     "local": "...", "remote": "..."
+///                 }
+///             }
 ///
 /// Returns:
 ///     (`bytes`):
-///         The serialized content.
+///         The serialized content (encrypted if config is provided).
 #[pyfunction]
-#[pyo3(signature = (tensor_dict, metadata=None))]
+#[pyo3(signature = (tensor_dict, metadata=None, config=None))]
 fn serialize<'b>(
     py: Python<'b>,
     tensor_dict: HashMap<String, PyBound<PyDict>>,
     metadata: Option<HashMap<String, String>>,
+    config: Option<PyBound<PyAny>>,
 ) -> PyResult<PyBound<'b, PyBytes>> {
     let tensors = prepare(tensor_dict)?;
-    let out = safetensors::tensor::serialize(&tensors, metadata)
+    let config = prepare_crypto(config)?;
+    let out = safetensors::tensor::serialize(&tensors, metadata, config.as_ref())
         .map_err(|e| SafetensorError::new_err(format!("Error while serializing: {e}")))?;
     let pybytes = PyBytes::new(py, &out);
     Ok(pybytes)
 }
 
 /// Serializes raw data into file.
+///
+/// MODIFIED: Added `config` parameter for encryption support.
 ///
 /// Args:
 ///     tensor_dict (`Dict[str, Dict[Any]]`):
@@ -144,26 +176,128 @@ fn serialize<'b>(
 ///         The name of the file to write into.
 ///     metadata (`Dict[str, str]`, *optional*):
 ///         The optional purely text annotations
+///     config (`Dict[str, Any]`, *optional*):
+///         Encryption configuration (see `serialize` for details).
 ///
 /// Returns:
 ///     (`NoneType`):
 ///         On success return None
 #[pyfunction]
-#[pyo3(signature = (tensor_dict, filename, metadata=None))]
+#[pyo3(signature = (tensor_dict, filename, metadata=None, config=None))]
 fn serialize_file(
     tensor_dict: HashMap<String, PyBound<PyDict>>,
     filename: PathBuf,
     metadata: Option<HashMap<String, String>>,
+    config: Option<PyBound<PyAny>>,
 ) -> PyResult<()> {
     let tensors = prepare(tensor_dict)?;
+    let config = prepare_crypto(config)?;
 
-    safetensors::tensor::serialize_to_file(&tensors, metadata, filename.as_path())
+    safetensors::tensor::serialize_to_file(&tensors, metadata, filename.as_path(), config.as_ref())
         .map_err(|e| SafetensorError::new_err(format!("Error while serializing: {e}")))?;
 
     Ok(())
 }
 
+/// MODIFIED: Parse Python dict to SerializeCryptoConfig for encryption.
+fn prepare_crypto(config: Option<PyBound<PyAny>>) -> PyResult<Option<SerializeCryptoConfig>> {
+    let Some(config) = config else { return Ok(None); };
+    if config.is_instance_of::<pyo3::types::PyNone>() {
+        return Ok(None);
+    }
+    let config_dict = config.downcast::<PyDict>()?;
+
+    // tensors: Optional[List[str]]
+    let tensors = match config_dict.get_item("tensors")? {
+        Some(val) => Some(val.extract::<Vec<String>>()?),
+        None => None,
+    };
+
+    // enc_key: dict
+    let enc_key_any = config_dict.get_item("enc_key")?
+        .ok_or_else(|| SafetensorError::new_err("Missing 'enc_key' in config"))?;
+    let enc_key_dict = enc_key_any.downcast::<PyDict>()?;
+    let enc_key = pykeymaterial_from_dict("enc", enc_key_dict)?;
+
+    // sign_key: dict
+    let sign_key_any = config_dict.get_item("sign_key")?
+        .ok_or_else(|| SafetensorError::new_err("Missing 'sign_key' in config"))?;
+    let sign_key_dict = sign_key_any.downcast::<PyDict>()?;
+    let sign_key = pykeymaterial_from_dict("sign", sign_key_dict)?;
+
+    // policy: dict (optional)
+    let policy = match config_dict.get_item("policy")? {
+        Some(val) => {
+            let policy_dict = val.downcast::<PyDict>()?;
+            let local = match policy_dict.get_item("local")? {
+                Some(v) => Some(v.extract::<String>()?),
+                None => None,
+            };
+            let remote = match policy_dict.get_item("remote")? {
+                Some(v) => Some(v.extract::<String>()?),
+                None => None,
+            };
+            AccessPolicy::new(local, remote)
+        },
+        None => AccessPolicy::new(None, None),
+    };
+
+    let config = SerializeCryptoConfig::new("1".to_string(), tensors, enc_key, sign_key, policy)
+        .map_err(|e| SafetensorError::new_err(format!("Failed to build SerializeCryptoConfig: {e}")))?;
+    Ok(Some(config))
+}
+
+/// MODIFIED: Convert a Python dict to KeyMaterial.
+fn pykeymaterial_from_dict(key_type: &str, dict: &PyBound<PyDict>) -> PyResult<KeyMaterial> {
+    // All fields are optional now
+    let alg = match dict.get_item("alg")? {
+        Some(v) => Some(v.extract::<String>()?),
+        None => None,
+    };
+    let kid = match dict.get_item("kid")? {
+        Some(v) => Some(v.extract::<String>()?),
+        None => None,
+    };
+    let jku = match dict.get_item("jku")? {
+        Some(v) => Some(v.extract::<String>()?),
+        None => None,
+    };
+    // k: hex string
+    let k = match dict.get_item("key")? {
+        Some(v) => Some(v.extract::<String>()?),
+        None => match dict.get_item("k")? {
+            Some(v) => Some(v.extract::<String>()?),
+            None => None,
+        },
+    };
+    // x_pub: hex string
+    let x_pub = match dict.get_item("public")? {
+        Some(v) => Some(v.extract::<String>()?),
+        None => match dict.get_item("x")? {
+            Some(v) => Some(v.extract::<String>()?),
+            None => None,
+        },
+    };
+    // d_priv: hex string
+    let d_priv = match dict.get_item("private")? {
+        Some(v) => Some(v.extract::<String>()?),
+        None => match dict.get_item("d")? {
+            Some(v) => Some(v.extract::<String>()?),
+            None => None,
+        },
+    };
+    match key_type {
+        "enc" => KeyMaterial::new_enc_key(k, alg, kid, jku)
+            .map_err(|e| SafetensorError::new_err(format!("Failed to build Enc KeyMaterial: {e}"))),
+        "sign" => KeyMaterial::new_sign_key(x_pub, d_priv, alg, kid, jku)
+            .map_err(|e| SafetensorError::new_err(format!("Failed to build Sign KeyMaterial: {e}"))),
+        _ => Err(SafetensorError::new_err("key_type must be 'enc' or 'sign'")),
+    }
+}
+
 /// Opens a safetensors lazily and returns tensors as asked
+///
+/// MODIFIED: Added support for decrypting encrypted tensors.
 ///
 /// Args:
 ///     data (`bytes`):
@@ -383,12 +517,12 @@ enum Storage {
     /// This allows us to not manage it
     /// so Pytorch can handle the whole lifecycle.
     /// https://pytorch.org/docs/stable/storage.html#torch.TypedStorage.from_file.
-    Torch(OnceLock<PyObject>),
+    TorchStorage(OnceLock<PyObject>),
     // Paddle specific mmap
     // This allows us to not manage the lifecycle of the storage,
     // Paddle can handle the whole lifecycle.
     // https://www.paddlepaddle.org.cn/documentation/docs/en/develop/api/paddle/MmapStorage_en.html
-    Paddle(OnceLock<PyObject>),
+    PaddleStorage(OnceLock<PyObject>),
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd)]
@@ -433,15 +567,19 @@ impl Version {
     }
 }
 
+/// MODIFIED: Added raw_mmap and crypto fields for encryption support.
 struct Open {
     metadata: Metadata,
     offset: usize,
     framework: Framework,
     device: Device,
     storage: Arc<Storage>,
+    raw_mmap: Option<Arc<Storage>>, // Storage for direct access to the data (needed for decryption)
+    crypto: Option<Arc<CryptoTensors<'static>>>,
 }
 
 impl Open {
+    /// MODIFIED: Added crypto parsing from header for decryption support.
     fn new(filename: PathBuf, framework: Framework, device: Option<Device>) -> PyResult<Self> {
         let file = File::open(&filename).map_err(|_| {
             PyFileNotFoundError::new_err(format!(
@@ -468,6 +606,12 @@ impl Open {
         })?;
 
         let offset = n + 8;
+
+        // MODIFIED: Parse crypto info from header (if encrypted file)
+        let crypto = safetensors::cryptotensors::CryptoTensors::from_header(&metadata)
+            .map_err(|e| SafetensorError::new_err(format!("Error parsing CryptoTensors: {e:?}")))?
+            .map(Arc::new);
+
         Python::with_gil(|py| -> PyResult<()> {
             match framework {
                 Framework::Pytorch => {
@@ -487,8 +631,8 @@ impl Open {
             Ok(())
         })?;
 
-        let storage = match &framework {
-            Framework::Paddle => Python::with_gil(|py| -> PyResult<Storage> {
+        let (storage, raw_mmap) = match &framework {
+            Framework::Paddle => Python::with_gil(|py| -> PyResult<(Storage, Option<Arc<Storage>>)> {
                 let paddle = get_module(py, &PADDLE_MODULE)?;
                 let version: String = paddle.getattr(intern!(py, "__version__"))?.extract()?;
                 let version = Version::from_string(&version).map_err(SafetensorError::new_err)?;
@@ -518,14 +662,21 @@ impl Open {
                         .into();
                     let gil_storage = OnceLock::new();
                     gil_storage.get_or_init_py_attached(py, || storage);
-                    Ok(Storage::Paddle(gil_storage))
+                    
+                    // MODIFIED: Keep raw mmap for crypto operations
+                    let raw_mmap = match crypto {
+                        Some(_) => Some(Arc::new(Storage::Mmap(buffer))),
+                        None => None,
+                    };
+                    
+                    Ok((Storage::PaddleStorage(gil_storage), raw_mmap))
                 } else {
                     let module = PyModule::import(py, intern!(py, "numpy"))?;
                     NUMPY_MODULE.get_or_init_py_attached(py, || module.into());
-                    Ok(Storage::Mmap(buffer))
+                    Ok((Storage::Mmap(buffer), None))
                 }
             })?,
-            Framework::Pytorch => Python::with_gil(|py| -> PyResult<Storage> {
+            Framework::Pytorch => Python::with_gil(|py| -> PyResult<(Storage, Option<Arc<Storage>>)> {
                 let module = get_module(py, &TORCH_MODULE)?;
 
                 let version: String = module.getattr(intern!(py, "__version__"))?.extract()?;
@@ -569,12 +720,18 @@ impl Open {
                     let gil_storage = OnceLock::new();
                     gil_storage.get_or_init_py_attached(py, || storage);
 
-                    Ok(Storage::Torch(gil_storage))
+                    // MODIFIED: Keep raw mmap for crypto operations
+                    let raw_mmap = match crypto {
+                        Some(_) => Some(Arc::new(Storage::Mmap(buffer))),
+                        None => None,
+                    };
+
+                    Ok((Storage::TorchStorage(gil_storage), raw_mmap))
                 } else {
-                    Ok(Storage::Mmap(buffer))
+                    Ok((Storage::Mmap(buffer), None))
                 }
             })?,
-            _ => Storage::Mmap(buffer),
+            _ => (Storage::Mmap(buffer), None),
         };
 
         let storage = Arc::new(storage);
@@ -585,6 +742,8 @@ impl Open {
             framework,
             device,
             storage,
+            raw_mmap,
+            crypto,
         })
     }
 
@@ -619,6 +778,8 @@ impl Open {
 
     /// Returns a full tensor
     ///
+    /// MODIFIED: Added decryption support for encrypted tensors.
+    ///
     /// Args:
     ///     name (`str`):
     ///         The name of the tensor you want
@@ -648,6 +809,14 @@ impl Open {
                 let data =
                     &mmap[info.data_offsets.0 + self.offset..info.data_offsets.1 + self.offset];
 
+                // MODIFIED: Decrypt if crypto is present
+                let data = if let Some(crypto) = &self.crypto {
+                    crypto.silent_decrypt(name, data)
+                        .map_err(|e| SafetensorError::new_err(format!("Decryption failed: {e:?}")))?
+                } else {
+                    data
+                };
+
                 let array: PyObject =
                     Python::with_gil(|py| PyByteArray::new(py, data).into_any().into());
 
@@ -659,7 +828,8 @@ impl Open {
                     &self.device,
                 )
             }
-            Storage::Paddle(storage) => {
+            // MODIFIED: Added crypto support for PaddleStorage
+            Storage::PaddleStorage(storage) => {
                 Python::with_gil(|py| -> PyResult<PyObject> {
                     let paddle = get_module(py, &PADDLE_MODULE)?;
                     let cur_type = if info.dtype == Dtype::U16 {
@@ -698,9 +868,40 @@ impl Open {
                     let storage_slice = storage
                         .getattr(intern!(py, "get_slice"))?
                         .call((), Some(&kwargs))?;
-                    let mut tensor = storage_slice
-                        .getattr(intern!(py, "view"))?
-                        .call1((dtype,))?;
+
+                    // MODIFIED: Handle encrypted tensors using raw_mmap
+                    // For encrypted tensors, we need to decrypt and use paddle.to_tensor()
+                    // For non-encrypted tensors, use the original storage_slice.view() directly
+                    let mut tensor = if self.crypto.as_ref().and_then(|c| c.get(name)).is_some() {
+                        let crypto = self.crypto.as_ref().unwrap();
+                        let array: PyObject = if let Some(decrypted) = crypto.get_buffer(name) {
+                            PyByteArray::new(py, decrypted).into_any().into()
+                        } else {
+                            let data = if let Some(raw_mmap) = &self.raw_mmap {
+                                if let Storage::Mmap(mmap) = raw_mmap.as_ref() {
+                                    &mmap[info.data_offsets.0 + self.offset..info.data_offsets.1 + self.offset]
+                                } else {
+                                    return Err(SafetensorError::new_err("raw_mmap is not Mmap"));
+                                }
+                            } else {
+                                return Err(SafetensorError::new_err("raw_mmap is None"));
+                            };
+                            let decrypted = crypto.silent_decrypt(name, data)
+                                .map_err(|e| SafetensorError::new_err(format!("Decryption failed: {e:?}")))?;
+                            PyByteArray::new(py, &decrypted).into_any().into()
+                        };
+                        // Encrypted path: use paddle.to_tensor() for decrypted bytes
+                        paddle
+                            .getattr(intern!(py, "to_tensor"))?
+                            .call1((array,))?
+                            .getattr(intern!(py, "view"))?
+                            .call1((dtype,))?
+                    } else {
+                        // Non-encrypted path: use original storage_slice.view() directly
+                        storage_slice
+                            .getattr(intern!(py, "view"))?
+                            .call1((dtype,))?
+                    };
 
                     if byteorder == "big" {
                         let inplace_kwargs =
@@ -745,7 +946,8 @@ impl Open {
                     Ok(tensor.into_pyobject(py)?.into())
                 })
             }
-            Storage::Torch(storage) => {
+            // MODIFIED: Added crypto support for TorchStorage
+            Storage::TorchStorage(storage) => {
                 Python::with_gil(|py| -> PyResult<PyObject> {
                     let torch = get_module(py, &TORCH_MODULE)?;
                     let dtype: PyObject = get_pydtype(torch, info.dtype, false)?;
@@ -776,16 +978,39 @@ impl Open {
                         .get()
                         .ok_or_else(|| SafetensorError::new_err("Could not find storage"))?;
                     let storage: &PyBound<PyAny> = storage.bind(py);
-                    let storage_slice = storage
+                    let storage_slice: PyBound<PyAny> = storage
                         .getattr(intern!(py, "__getitem__"))?
                         .call1((slice,))?;
+
+                    // MODIFIED: Handle encrypted tensors using raw_mmap
+                    let array: PyObject = if self.crypto.as_ref().and_then(|c| c.get(name)).is_some() {
+                        let crypto = self.crypto.as_ref().unwrap();
+                        if let Some(decrypted) = crypto.get_buffer(name) {
+                            PyByteArray::new(py, decrypted).into_any().into()
+                        } else {
+                            let data = if let Some(raw_mmap) = &self.raw_mmap {
+                                if let Storage::Mmap(mmap) = raw_mmap.as_ref() {
+                                    &mmap[info.data_offsets.0 + self.offset..info.data_offsets.1 + self.offset]
+                                } else {
+                                    return Err(SafetensorError::new_err("raw_mmap is not Mmap"));
+                                }
+                            } else {
+                                return Err(SafetensorError::new_err("raw_mmap is None"));
+                            };
+                            let decrypted = crypto.silent_decrypt(name, data)
+                                .map_err(|e| SafetensorError::new_err(format!("Decryption failed: {e:?}")))?;
+                            PyByteArray::new(py, &decrypted).into_any().into()
+                        }
+                    } else {
+                        storage_slice.into()
+                    };
 
                     let sys = PyModule::import(py, intern!(py, "sys"))?;
                     let byteorder: String = sys.getattr(intern!(py, "byteorder"))?.extract()?;
 
                     let mut tensor = torch
                         .getattr(intern!(py, "asarray"))?
-                        .call((storage_slice,), Some(&kwargs))?
+                        .call((array,), Some(&kwargs))?
                         .getattr(intern!(py, "view"))?
                         .call((), Some(&view_kwargs))?;
 
@@ -833,6 +1058,8 @@ impl Open {
 
     /// Returns a full slice view object
     ///
+    /// MODIFIED: Added crypto fields for decryption support.
+    ///
     /// Args:
     ///     name (`str`):
     ///         The name of the tensor you want
@@ -851,11 +1078,14 @@ impl Open {
     pub fn get_slice(&self, name: &str) -> PyResult<PySafeSlice> {
         if let Some(info) = self.metadata.info(name) {
             Ok(PySafeSlice {
+                name: name.to_string(),
                 info: info.clone(),
                 framework: self.framework.clone(),
                 offset: self.offset,
                 device: self.device.clone(),
                 storage: self.storage.clone(),
+                raw_mmap: self.raw_mmap.clone(),
+                crypto: self.crypto.clone(),
             })
         } else {
             Err(SafetensorError::new_err(format!(
@@ -983,13 +1213,17 @@ impl safe_open {
     }
 }
 
+/// MODIFIED: Added name, raw_mmap, and crypto fields for decryption support.
 #[pyclass]
 struct PySafeSlice {
+    name: String,
     info: TensorInfo,
     framework: Framework,
     offset: usize,
     device: Device,
     storage: Arc<Storage>,
+    raw_mmap: Option<Arc<Storage>>,
+    crypto: Option<Arc<CryptoTensors<'static>>>,
 }
 
 #[derive(FromPyObject)]
@@ -1061,6 +1295,7 @@ impl PySafeSlice {
         Ok(self.info.dtype.to_string().into_pyobject(py)?.into())
     }
 
+    /// MODIFIED: Added crypto decryption support.
     pub fn __getitem__(&self, slices: &PyBound<'_, PyAny>) -> PyResult<PyObject> {
         match &self.storage.as_ref() {
             Storage::Mmap(mmap) => {
@@ -1083,6 +1318,14 @@ impl PySafeSlice {
                 };
                 let data = &mmap[self.info.data_offsets.0 + self.offset
                     ..self.info.data_offsets.1 + self.offset];
+                
+                // MODIFIED: Decrypt if crypto is present
+                let data = if let Some(crypto) = &self.crypto {
+                    crypto.silent_decrypt(&self.name, data)
+                        .map_err(|e| SafetensorError::new_err(format!("Decryption failed: {e:?}")))?
+                } else {
+                    data
+                };
 
                 let shape = self.info.shape.clone();
 
@@ -1129,7 +1372,8 @@ impl PySafeSlice {
                     )
                 })
             }
-            Storage::Torch(storage) => Python::with_gil(|py| -> PyResult<PyObject> {
+            // MODIFIED: Added crypto support for TorchStorage
+            Storage::TorchStorage(storage) => Python::with_gil(|py| -> PyResult<PyObject> {
                 let torch = get_module(py, &TORCH_MODULE)?;
                 let dtype: PyObject = get_pydtype(torch, self.info.dtype, false)?;
                 let torch_uint8: PyObject = get_pydtype(torch, Dtype::U8, false)?;
@@ -1151,13 +1395,36 @@ impl PySafeSlice {
                     .call1((slice,))?;
 
                 let slices = slices.into_pyobject(py)?;
+                
+                // MODIFIED: Handle encrypted tensors using raw_mmap
+                let array: PyObject = if self.crypto.as_ref().and_then(|c| c.get(&self.name)).is_some() {
+                    let crypto = self.crypto.as_ref().unwrap();
+                    if let Some(decrypted) = crypto.get_buffer(&self.name) {
+                        PyByteArray::new(py, decrypted).into_any().into()
+                    } else {
+                        let data = if let Some(raw_mmap) = &self.raw_mmap {
+                            if let Storage::Mmap(mmap) = raw_mmap.as_ref() {
+                                &mmap[self.info.data_offsets.0 + self.offset..self.info.data_offsets.1 + self.offset]
+                            } else {
+                                return Err(SafetensorError::new_err("raw_mmap is not Mmap"));
+                            }
+                        } else {
+                            return Err(SafetensorError::new_err("raw_mmap is None"));
+                        };
+                        let decrypted = crypto.silent_decrypt(&self.name, data)
+                            .map_err(|e| SafetensorError::new_err(format!("Decryption failed: {e:?}")))?;
+                        PyByteArray::new(py, &decrypted).into_any().into()
+                    }
+                } else {
+                    storage_slice.into()
+                };
 
                 let sys = PyModule::import(py, intern!(py, "sys"))?;
                 let byteorder: String = sys.getattr(intern!(py, "byteorder"))?.extract()?;
 
                 let mut tensor = torch
                     .getattr(intern!(py, "asarray"))?
-                    .call((storage_slice,), Some(&kwargs))?
+                    .call((array,), Some(&kwargs))?
                     .getattr(intern!(py, "view"))?
                     .call((), Some(&view_kwargs))?;
                 if byteorder == "big" {
@@ -1208,7 +1475,8 @@ impl PySafeSlice {
                 }
                 Ok(tensor.into())
             }),
-            Storage::Paddle(storage) => Python::with_gil(|py| -> PyResult<PyObject> {
+            // MODIFIED: Added crypto support for PaddleStorage
+            Storage::PaddleStorage(storage) => Python::with_gil(|py| -> PyResult<PyObject> {
                 let paddle = get_module(py, &PADDLE_MODULE)?;
                 let cur_type = if self.info.dtype == Dtype::U16 {
                     Dtype::BF16
@@ -1235,9 +1503,40 @@ impl PySafeSlice {
                 let storage_slice = storage
                     .getattr(intern!(py, "get_slice"))?
                     .call((), Some(&slice_kwargs))?;
-                let mut tensor = storage_slice
-                    .getattr(intern!(py, "view"))?
-                    .call1((dtype,))?;
+
+                // MODIFIED: Handle encrypted tensors using raw_mmap
+                // For encrypted tensors, we need to decrypt and use paddle.to_tensor()
+                // For non-encrypted tensors, use the original storage_slice.view() directly
+                let mut tensor = if self.crypto.as_ref().and_then(|c| c.get(&self.name)).is_some() {
+                    let crypto = self.crypto.as_ref().unwrap();
+                    let array: PyObject = if let Some(decrypted) = crypto.get_buffer(&self.name) {
+                        PyByteArray::new(py, decrypted).into_any().into()
+                    } else {
+                        let data = if let Some(raw_mmap) = &self.raw_mmap {
+                            if let Storage::Mmap(mmap) = raw_mmap.as_ref() {
+                                &mmap[self.info.data_offsets.0 + self.offset..self.info.data_offsets.1 + self.offset]
+                            } else {
+                                return Err(SafetensorError::new_err("raw_mmap is not Mmap"));
+                            }
+                        } else {
+                            return Err(SafetensorError::new_err("raw_mmap is None"));
+                        };
+                        let decrypted = crypto.silent_decrypt(&self.name, data)
+                            .map_err(|e| SafetensorError::new_err(format!("Decryption failed: {e:?}")))?;
+                        PyByteArray::new(py, &decrypted).into_any().into()
+                    };
+                    // Encrypted path: use paddle.to_tensor() for decrypted bytes
+                    paddle
+                        .getattr(intern!(py, "to_tensor"))?
+                        .call1((array,))?
+                        .getattr(intern!(py, "view"))?
+                        .call1((dtype,))?
+                } else {
+                    // Non-encrypted path: use original storage_slice.view() directly
+                    storage_slice
+                        .getattr(intern!(py, "view"))?
+                        .call1((dtype,))?
+                };
                 let sys = PyModule::import(py, intern!(py, "sys"))?;
                 let byteorder: String = sys.getattr(intern!(py, "byteorder"))?.extract()?;
                 if byteorder == "big" {

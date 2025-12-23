@@ -1,0 +1,57 @@
+CryptoTensors
+Copyright 2025-2026 aiyah-meloken
+
+This project is a derivative work based on safetensors by Hugging Face.
+Original project: https://github.com/huggingface/safetensors
+Original Copyright: Copyright 2022 The HuggingFace Inc. team
+
+================================================================================
+MODIFICATIONS TO THE ORIGINAL SAFETENSORS PROJECT
+================================================================================
+
+The following files have been MODIFIED from the original safetensors project:
+
+1. safetensors/src/lib.rs
+   - Added module exports for encryption functionality (cryptotensors, encryption,
+     signing, key, policy, registry)
+
+2. safetensors/src/tensor.rs
+   - Added CryptoTensorsError variant to SafeTensorError enum
+   - Modified serialize/serialize_to_file functions to accept optional
+     encryption configuration
+   - Modified SafeTensors struct to include optional CryptoTensors field
+   - Added transparent encryption/decryption support in tensor access methods
+
+3. safetensors/Cargo.toml
+   - Added cryptographic dependencies (ring, rsa, rand, zeroize, etc.)
+
+4. bindings/python/src/lib.rs
+   - Added encryption configuration support in serialize functions
+   - Modified Open/PySafeSlice structs to support encrypted tensors
+   - Added KeyProvider registration interface
+
+5. bindings/python/Cargo.toml
+   - Renamed package to cryptotensors
+   - Updated dependencies for encryption support
+
+================================================================================
+NEW FILES ADDED (not present in original safetensors)
+================================================================================
+
+The following files are NEW additions, not modifications of existing files:
+
+- safetensors/src/cryptotensors.rs : Encryption/decryption manager and error types (using thiserror)
+- safetensors/src/encryption.rs    : AES-GCM/ChaCha20 encryption functions
+- safetensors/src/signing.rs       : Ed25519 signing/verification functions
+- safetensors/src/key.rs            : JWK key management
+- safetensors/src/policy.rs        : Access policy engine (Rego) for model loading validation
+- safetensors/src/registry.rs      : Pluggable KeyProvider registry interface
+- bindings/compatible/             : Compatibility adapter package
+
+================================================================================
+ORIGINAL SAFETENSORS LICENSE
+================================================================================
+
+The original safetensors project is licensed under the Apache License 2.0.
+A copy of this license is included in the LICENSE file.
+

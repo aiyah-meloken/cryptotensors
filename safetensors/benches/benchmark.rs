@@ -1,3 +1,14 @@
+// Copyright 2025-2026 aiyah-meloken
+// SPDX-License-Identifier: Apache-2.0
+//
+// MODIFIED: This file has been modified from the original safetensors project.
+// Changes:
+//   - Updated serialize() calls to include the new crypto_config parameter
+//   - This file is part of CryptoTensors, a derivative work based on safetensors.
+//
+// Original safetensors project: https://github.com/huggingface/safetensors
+// Original Copyright: Copyright 2022 The HuggingFace Inc. team
+
 use criterion::{criterion_group, criterion_main, Criterion};
 use safetensors::tensor::*;
 use std::collections::HashMap;
@@ -28,7 +39,8 @@ pub fn bench_serialize(c: &mut Criterion) {
 
     c.bench_function("Serialize 10_MB", |b| {
         b.iter(|| {
-            let _serialized = serialize(black_box(&metadata), black_box(None));
+            // MODIFIED: Added crypto_config parameter (None for unencrypted benchmark)
+            let _serialized = serialize(black_box(&metadata), black_box(None), black_box(None));
         })
     });
 }
@@ -44,7 +56,8 @@ pub fn bench_deserialize(c: &mut Criterion) {
         metadata.insert(format!("weight{i}"), tensor);
     }
 
-    let out = serialize(&metadata, None).unwrap();
+    // MODIFIED: Added crypto_config parameter (None for unencrypted benchmark)
+    let out = serialize(&metadata, None, None).unwrap();
 
     c.bench_function("Deserialize 10_MB", |b| {
         b.iter(|| {

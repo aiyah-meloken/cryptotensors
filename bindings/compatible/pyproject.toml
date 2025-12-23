@@ -1,7 +1,8 @@
 [project]
-name = 'cryptotensors'
-requires-python = '>=3.9'
-description = 'CryptoTensors: Safetensors with encryption support'
+name = 'safetensors'
+requires-python = '>=3.8'
+description = 'A safetensors adapter layer for cryptotensors, to avoid package requirements errors.'
+version = '0.7.0'
 authors = [
     {name = 'Nicolas Patry', email = 'patry.nicolas@protonmail.com'}
 ]
@@ -13,17 +14,20 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Typing :: Typed",
 ]
 license = { file = "LICENSE" }
 dynamic = [
     'readme',
-    'version',
+]
+
+dependencies = [
+    "cryptotensors>=0.0.1"
 ]
 
 [project.urls]
@@ -33,21 +37,15 @@ Source = 'https://github.com/huggingface/safetensors'
 [project.optional-dependencies]
 numpy = ["numpy>=1.21.6"]
 torch = [
-    "packaging",
-    "cryptotensors[numpy]",
+    "safetensors[numpy]",
     "torch>=1.10",
 ]
 tensorflow = [
-    "cryptotensors[numpy]",
+    "safetensors[numpy]",
     "tensorflow>=2.11.0",
 ]
-# pinning tf version 2.11.0 for doc-builder
-pinned-tf = [
-    "cryptotensors[numpy]",
-    "tensorflow==2.18.0",
-]
 jax = [
-    "cryptotensors[numpy]",
+    "safetensors[numpy]",
     "flax>=0.6.3",
     "jax>=0.3.25",
     "jaxlib>=0.3.25",
@@ -56,58 +54,44 @@ mlx = [
     "mlx>=0.0.9",
 ]
 paddlepaddle = [
-    "cryptotensors[numpy]",
+    "safetensors[numpy]",
     "paddlepaddle>=2.4.1",
 ]
 quality = [
-    "ruff",
+    "black>=22.3",
+    "isort>=5.5.4",
+    "flake8>=3.8.3",
 ]
 testing = [
-    "cryptotensors[numpy]",
+    "safetensors[numpy]",
     "h5py>=3.7.0",
     "huggingface_hub>=0.12.1",
     "setuptools_rust>=1.5.2",
     "pytest>=7.2.0",
     "pytest-benchmark>=4.0.0",
-    # "python-afl>=0.7.3",
-    "hypothesis>=6.70.2",
-]
-testingfree = [
-    "cryptotensors[numpy]",
-    "huggingface_hub>=0.12.1",
-    "setuptools_rust>=1.5.2",
-    "pytest>=7.2.0",
-    "pytest-benchmark>=4.0.0",
-    # "python-afl>=0.7.3",
     "hypothesis>=6.70.2",
 ]
 all = [
-    "cryptotensors[torch]",
-    "cryptotensors[numpy]",
-    "cryptotensors[pinned-tf]",
-    "cryptotensors[jax]",
-    "cryptotensors[paddlepaddle]",
-    "cryptotensors[quality]",
-    "cryptotensors[testing]",
+    "safetensors[torch]",
+    "safetensors[numpy]",
+    "safetensors[tensorflow]",
+    "safetensors[jax]",
+    "safetensors[paddlepaddle]",
+    "safetensors[quality]",
+    "safetensors[testing]",
 ]
 dev = [
-    "cryptotensors[all]",
+    "safetensors[all]",
 ]
 
-
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
-build-backend = "maturin"
-
-[tool.maturin]
-python-source = "py_src"
-module-name = "cryptotensors._safetensors_rust"
-bindings = 'pyo3'
-features = ["pyo3/extension-module"]
-
-[tool.black]
-line-length = 119
-target-version = ['py35']
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.dynamic]
 readme = {file = ["README.md"]}
+
+[tool.setuptools.packages.find]
+where = ["py_src"]
+include = ["safetensors*"]
+

@@ -1,11 +1,17 @@
+// MODIFICATION: This file has been modified from the original safetensors project.
+// Added CryptoTensorsError variant to SafeTensorError, crypto_config parameter to serialize
+// functions, and transparent encryption/decryption support. See NOTICE file for details.
+
 //! Module Containing the most important structures
 use crate::lib::{Cow, HashMap, String, ToString, Vec};
 use crate::slice::{InvalidSlice, SliceIterator, TensorIndexer};
+use crate::cryptotensors::{CryptoTensors, SerializeCryptoConfig};
 use core::fmt::Display;
 use core::str::Utf8Error;
 use serde::{ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer};
 #[cfg(feature = "std")]
 use std::io::Write;
+use std::collections::BTreeMap;
 
 const MAX_HEADER_SIZE: usize = 100_000_000;
 const N_LEN: usize = size_of::<u64>();
@@ -49,6 +55,8 @@ pub enum SafeTensorError {
     /// For smaller than 1 byte dtypes, some slices will happen outside of the byte boundary, some special care has to be taken
     /// and standard functions will fail
     MisalignedSlice,
+    /// CryptoTensors: Error during cryptographic operations
+    CryptoTensorsError(String),
 }
 
 #[cfg(feature = "std")]
@@ -61,6 +69,12 @@ impl From<std::io::Error> for SafeTensorError {
 impl From<serde_json::Error> for SafeTensorError {
     fn from(error: serde_json::Error) -> SafeTensorError {
         SafeTensorError::JsonError(error)
+    }
+}
+
+impl From<crate::cryptotensors::CryptoTensorsError> for SafeTensorError {
+    fn from(error: crate::cryptotensors::CryptoTensorsError) -> Self {
+        SafeTensorError::CryptoTensorsError(error.to_string())
     }
 }
 
@@ -90,7 +104,8 @@ impl Display for SafeTensorError {
             }
             MetadataIncompleteBuffer => write!(f, "incomplete metadata, file not fully covered"),
             ValidationOverflow => write!(f, "overflow computing buffer size from shape and/or element type"),
-            MisalignedSlice => write!(f, "The slice is slicing for subbytes dtypes, and the slice does not end up at a byte boundary, this is invalid.")
+            MisalignedSlice => write!(f, "The slice is slicing for subbytes dtypes, and the slice does not end up at a byte boundary, this is invalid."),
+            CryptoTensorsError(error) => write!(f, "CryptoTensors error: {error}"),
         }
     }
 }
@@ -218,10 +233,11 @@ pub trait View {
     fn data_len(&self) -> usize;
 }
 
-fn prepare<S, V, I>(
+fn prepare<'data, S, V, I>(
     data: I,
     data_info: Option<HashMap<String, String>>,
-) -> Result<(PreparedData, Vec<V>), SafeTensorError>
+    crypto_config: Option<&SerializeCryptoConfig>,
+) -> Result<(PreparedData, Vec<V>, Option<CryptoTensors<'data>>, Vec<String>), SafeTensorError>
 where
     S: AsRef<str> + Ord + Display,
     V: View,
@@ -234,23 +250,49 @@ where
         right.dtype().cmp(&left.dtype()).then(lname.cmp(rname))
     });
 
+    // Collect tensor names for crypto initialization
+    let tensor_names: Vec<String> = data.iter().map(|(name, _)| name.as_ref().to_string()).collect();
+
+    // Initialize CryptoTensors if config is provided
+    let crypto = if let Some(config) = crypto_config {
+        CryptoTensors::from_serialize_config(tensor_names.clone(), config)?
+    } else {
+        None
+    };
+
     let mut tensors: Vec<V> = Vec::with_capacity(data.len());
     let mut hmetadata = Vec::with_capacity(data.len());
     let mut offset = 0;
 
     for (name, tensor) in data {
-        let n = tensor.data_len();
+        let tensor_name = name.as_ref().to_string();
+        
+        // Encrypt tensor data if crypto is configured for this tensor
+        let n = if let Some(ref c) = crypto {
+            c.silent_encrypt(&tensor_name, tensor.data().as_ref())?;
+            c.get_buffer(&tensor_name).map(|b| b.len()).unwrap_or(tensor.data_len())
+        } else {
+            tensor.data_len()
+        };
+        
         let tensor_info = TensorInfo {
             dtype: tensor.dtype(),
             shape: tensor.shape().to_vec(),
             data_offsets: (offset, offset + n),
         };
         offset += n;
-        hmetadata.push((name.to_string(), tensor_info));
+        hmetadata.push((tensor_name, tensor_info.clone()));
         tensors.push(tensor);
     }
 
-    let metadata: Metadata = Metadata::new(data_info, hmetadata)?;
+    // Generate metadata with crypto information if encryption is enabled
+    let final_metadata = if let Some(ref c) = crypto {
+        c.generate_metadata(hmetadata.clone(), data_info)?
+    } else {
+        data_info
+    };
+
+    let metadata: Metadata = Metadata::new(final_metadata, hmetadata)?;
     let mut metadata_buf = serde_json::to_string(&metadata)?.into_bytes();
 
     // Force alignment to 8 bytes.
@@ -264,10 +306,17 @@ where
             offset,
         },
         tensors,
+        crypto,
+        tensor_names,
     ))
 }
 
 /// Serialize to an owned byte buffer the dictionnary of tensors.
+/// 
+/// # Arguments
+/// * `data` - Iterator of (name, tensor) pairs
+/// * `data_info` - Optional metadata to include in the header
+/// * `crypto_config` - Optional encryption configuration for CryptoTensors
 pub fn serialize<
     S: AsRef<str> + Ord + core::fmt::Display,
     V: View,
@@ -275,6 +324,7 @@ pub fn serialize<
 >(
     data: I,
     data_info: Option<HashMap<String, String>>,
+    crypto_config: Option<&SerializeCryptoConfig>,
 ) -> Result<Vec<u8>, SafeTensorError> {
     let (
         PreparedData {
@@ -283,7 +333,9 @@ pub fn serialize<
             offset,
         },
         tensors,
-    ) = prepare(data, data_info)?;
+        crypto,
+        tensor_names,
+    ) = prepare(data, data_info, crypto_config)?;
 
     if n > MAX_HEADER_SIZE as u64 {
         return Err(SafeTensorError::HeaderTooLarge);
@@ -294,7 +346,14 @@ pub fn serialize<
     buffer.extend(n.to_le_bytes());
     buffer.extend(header_bytes);
 
-    for tensor in tensors {
+    for (tensor, name) in tensors.iter().zip(tensor_names.iter()) {
+        // Use encrypted data if available, otherwise use original data
+        if let Some(ref c) = crypto {
+            if let Some(encrypted_data) = c.get_buffer(name) {
+                buffer.extend(encrypted_data);
+                continue;
+            }
+        }
         buffer.extend(tensor.data().as_ref());
     }
 
@@ -304,11 +363,18 @@ pub fn serialize<
 /// Serialize to a regular file the dictionnary of tensors.
 /// Writing directly to file reduces the need to allocate the whole amount to
 /// memory.
+/// 
+/// # Arguments
+/// * `data` - Iterator of (name, tensor) pairs
+/// * `data_info` - Optional metadata to include in the header
+/// * `filename` - Path to the output file
+/// * `crypto_config` - Optional encryption configuration for CryptoTensors
 #[cfg(feature = "std")]
 pub fn serialize_to_file<S, V, I>(
     data: I,
     data_info: Option<HashMap<String, String>>,
     filename: &std::path::Path,
+    crypto_config: Option<&SerializeCryptoConfig>,
 ) -> Result<(), SafeTensorError>
 where
     S: AsRef<str> + Ord + Display,
@@ -320,7 +386,9 @@ where
             n, header_bytes, ..
         },
         tensors,
-    ) = prepare(data, data_info)?;
+        crypto,
+        tensor_names,
+    ) = prepare(data, data_info, crypto_config)?;
 
     if n > MAX_HEADER_SIZE as u64 {
         return Err(SafeTensorError::HeaderTooLarge);
@@ -330,7 +398,14 @@ where
     f.write_all(n.to_le_bytes().as_ref())?;
     f.write_all(&header_bytes)?;
 
-    for tensor in tensors {
+    for (tensor, name) in tensors.iter().zip(tensor_names.iter()) {
+        // Use encrypted data if available, otherwise use original data
+        if let Some(ref c) = crypto {
+            if let Some(encrypted_data) = c.get_buffer(name) {
+                f.write_all(encrypted_data)?;
+                continue;
+            }
+        }
         f.write_all(tensor.data().as_ref())?;
     }
 
@@ -345,6 +420,8 @@ where
 pub struct SafeTensors<'data> {
     metadata: Metadata,
     data: &'data [u8],
+    /// CryptoTensors: Optional encryption information for transparent decryption
+    crypto: Option<CryptoTensors<'data>>,
 }
 
 impl<'data> SafeTensors<'data> {
@@ -414,20 +491,33 @@ impl<'data> SafeTensors<'data> {
     pub fn deserialize(buffer: &'data [u8]) -> Result<Self, SafeTensorError> {
         let (n, metadata) = SafeTensors::read_metadata(buffer)?;
         let data = &buffer[N_LEN + n..];
-        Ok(Self { metadata, data })
+        
+        // Initialize CryptoTensors from header if encryption metadata is present
+        let crypto = CryptoTensors::from_header(&metadata)?;
+        
+        Ok(Self { metadata, data, crypto })
     }
 
     /// Returns the tensors contained within the SafeTensors.
     /// The tensors returned are merely views and the data is not owned by this
-    /// structure.
-    pub fn tensors(&self) -> Vec<(String, TensorView<'data>)> {
+    /// structure. If encryption is enabled, tensors are transparently decrypted.
+    pub fn tensors(&'data self) -> Vec<(String, TensorView<'data>)> {
         let mut tensors = Vec::with_capacity(self.metadata.index_map.len());
         for (name, &index) in &self.metadata.index_map {
             let info = &self.metadata.tensors[index];
+            let raw_data = &self.data[info.data_offsets.0..info.data_offsets.1];
+            
+            // Transparently decrypt if crypto is available
+            let data = if let Some(ref crypto) = self.crypto {
+                crypto.silent_decrypt(name, raw_data).unwrap_or(raw_data)
+            } else {
+                raw_data
+            };
+            
             let tensorview = TensorView {
                 dtype: info.dtype,
                 shape: info.shape.clone(),
-                data: &self.data[info.data_offsets.0..info.data_offsets.1],
+                data,
             };
             tensors.push((name.to_string(), tensorview));
         }
@@ -436,16 +526,25 @@ impl<'data> SafeTensors<'data> {
 
     /// Returns an iterator over the tensors contained within the SafeTensors.
     /// The tensors returned are merely views and the data is not owned by this
-    /// structure.
-    pub fn iter(&self) -> impl Iterator<Item = (&str, TensorView<'data>)> {
-        self.metadata.index_map.iter().map(|(name, &idx)| {
+    /// structure. If encryption is enabled, tensors are transparently decrypted.
+    pub fn iter(&'data self) -> impl Iterator<Item = (&'data str, TensorView<'data>)> {
+        self.metadata.index_map.iter().map(move |(name, &idx)| {
             let info = &self.metadata.tensors[idx];
+            let raw_data = &self.data[info.data_offsets.0..info.data_offsets.1];
+            
+            // Transparently decrypt if crypto is available
+            let data = if let Some(ref crypto) = self.crypto {
+                crypto.silent_decrypt(name, raw_data).unwrap_or(raw_data)
+            } else {
+                raw_data
+            };
+            
             (
                 name.as_str(),
                 TensorView {
                     dtype: info.dtype,
                     shape: info.shape.clone(),
-                    data: &self.data[info.data_offsets.0..info.data_offsets.1],
+                    data,
                 },
             )
         })
@@ -453,8 +552,8 @@ impl<'data> SafeTensors<'data> {
 
     /// Allow the user to get a specific tensor within the SafeTensors.
     /// The tensor returned is merely a view and the data is not owned by this
-    /// structure.
-    pub fn tensor(&self, tensor_name: &str) -> Result<TensorView<'data>, SafeTensorError> {
+    /// structure. If encryption is enabled, the tensor is transparently decrypted.
+    pub fn tensor(&'data self, tensor_name: &str) -> Result<TensorView<'data>, SafeTensorError> {
         let &index = self
             .metadata
             .index_map
@@ -467,10 +566,19 @@ impl<'data> SafeTensors<'data> {
             .get(index)
             .ok_or_else(|| SafeTensorError::TensorNotFound(tensor_name.to_string()))?;
 
+        let raw_data = &self.data[info.data_offsets.0..info.data_offsets.1];
+        
+        // Transparently decrypt if crypto is available
+        let data = if let Some(ref crypto) = self.crypto {
+            crypto.silent_decrypt(tensor_name, raw_data)?
+        } else {
+            raw_data
+        };
+
         Ok(TensorView {
             dtype: info.dtype,
             shape: info.shape.clone(),
-            data: &self.data[info.data_offsets.0..info.data_offsets.1],
+            data,
         })
     }
 
@@ -553,7 +661,9 @@ impl Serialize for Metadata {
         let mut map = serializer.serialize_map(Some(self.tensors.len() + length))?;
 
         if let Some(metadata) = &self.metadata {
-            map.serialize_entry("__metadata__", metadata)?;
+            // CryptoTensors: Sort metadata for deterministic signature verification
+            let sorted_metadata: BTreeMap<_, _> = metadata.iter().collect();
+            map.serialize_entry("__metadata__", &sorted_metadata)?;
         }
 
         for (name, info) in names.iter().zip(&self.tensors) {
@@ -995,7 +1105,7 @@ mod tests {
         #[test]
         fn test_indexing(metadata in arbitrary_metadata()) {
             let data = vec![0u8; data_size(&metadata)];
-            let tensors = SafeTensors { metadata, data: &data };
+            let tensors = SafeTensors { metadata, data: &data, crypto: None };
             for name in tensors.names() {
                 assert!(tensors.tensor(name).is_ok());
             }
@@ -1003,9 +1113,9 @@ mod tests {
         #[test]
         fn test_roundtrip(metadata in arbitrary_metadata()) {
             let data: Vec<u8> = (0..data_size(&metadata)).map(|x| x as u8).collect();
-            let before = SafeTensors { metadata, data: &data };
+            let before = SafeTensors { metadata, data: &data, crypto: None };
             let tensors = before.tensors();
-            let bytes = serialize(tensors.iter().map(|(name, view)| (name.to_string(), view)), None).unwrap();
+            let bytes = serialize(tensors.iter().map(|(name, view)| (name.to_string(), view)), None, None).unwrap();
 
             let after = SafeTensors::deserialize(&bytes).unwrap();
 
@@ -1031,7 +1141,7 @@ mod tests {
         let metadata: HashMap<String, TensorView> =
             [("attn.0".to_string(), attn_0)].into_iter().collect();
 
-        let out = serialize(&metadata, None).unwrap();
+        let out = serialize(&metadata, None, None).unwrap();
         assert_eq!(
             out,
             [
@@ -1053,7 +1163,7 @@ mod tests {
         let metadata: HashMap<String, TensorView> =
             [("attn.0".to_string(), attn_0)].into_iter().collect();
 
-        let out = serialize(&metadata, None).unwrap();
+        let out = serialize(&metadata, None, None).unwrap();
         assert_eq!(
             out,
             [
@@ -1091,7 +1201,7 @@ mod tests {
     fn test_empty() {
         let tensors: HashMap<String, TensorView> = HashMap::new();
 
-        let out = serialize(&tensors, None).unwrap();
+        let out = serialize(&tensors, None, None).unwrap();
         assert_eq!(
             out,
             [8, 0, 0, 0, 0, 0, 0, 0, 123, 125, 32, 32, 32, 32, 32, 32]
@@ -1103,7 +1213,7 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let out = serialize(&tensors, metadata).unwrap();
+        let out = serialize(&tensors, metadata, None).unwrap();
         assert_eq!(
             out,
             [
@@ -1127,7 +1237,7 @@ mod tests {
             // Smaller string to force misalignment compared to previous test.
             [("attn0".to_string(), attn_0)].into_iter().collect();
 
-        let out = serialize(&metadata, None).unwrap();
+        let out = serialize(&metadata, None, None).unwrap();
         assert_eq!(
             out,
             [
@@ -1163,7 +1273,7 @@ mod tests {
         let metadata: HashMap<String, TensorView> =
             [("attn.0".to_string(), attn_0)].into_iter().collect();
 
-        let out = serialize(&metadata, None).unwrap();
+        let out = serialize(&metadata, None, None).unwrap();
         let parsed = SafeTensors::deserialize(&out).unwrap();
 
         let out_buffer: Vec<u8> = parsed
@@ -1257,7 +1367,7 @@ mod tests {
 
         let filename = format!("./out_{model_id}.safetensors");
 
-        let out = serialize(&metadata, None).unwrap();
+        let out = serialize(&metadata, None, None).unwrap();
         std::fs::write(&filename, out).unwrap();
         let raw = std::fs::read(&filename).unwrap();
         let _deserialized = SafeTensors::deserialize(&raw).unwrap();
@@ -1266,7 +1376,7 @@ mod tests {
         // File api
         #[cfg(feature = "std")]
         {
-            serialize_to_file(&metadata, None, std::path::Path::new(&filename)).unwrap();
+            serialize_to_file(&metadata, None, std::path::Path::new(&filename), None).unwrap();
             let raw = std::fs::read(&filename).unwrap();
             let _deserialized = SafeTensors::deserialize(&raw).unwrap();
             std::fs::remove_file(&filename).unwrap();
@@ -1305,10 +1415,9 @@ mod tests {
     fn test_lifetimes() {
         let serialized = b"<\x00\x00\x00\x00\x00\x00\x00{\"test\":{\"dtype\":\"I32\",\"shape\":[2,2],\"data_offsets\":[0,16]}}\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
-        let tensor = {
-            let loaded = SafeTensors::deserialize(serialized).unwrap();
-            loaded.tensor("test").unwrap()
-        };
+        // MODIFIED: Tensor view borrows from SafeTensors, so keep it in scope
+        let loaded = SafeTensors::deserialize(serialized).unwrap();
+        let tensor = loaded.tensor("test").unwrap();
 
         assert_eq!(tensor.shape(), vec![2, 2]);
         assert_eq!(tensor.dtype(), Dtype::I32);
@@ -1511,7 +1620,7 @@ mod tests {
         // a char is 1 byte in utf-8, so we can just repeat 'a' to get large metadata
         let very_large_metadata = "a".repeat(MAX_HEADER_SIZE);
         data_info.insert("very_large_metadata".to_string(), very_large_metadata);
-        match serialize(&tensors, Some(data_info)) {
+        match serialize(&tensors, Some(data_info), None) {
             Err(SafeTensorError::HeaderTooLarge) => {
                 // Yes we have the correct error
             }

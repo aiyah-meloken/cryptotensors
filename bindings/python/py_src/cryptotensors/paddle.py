@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional, Union
 import numpy as np
 import paddle
 
-from safetensors import numpy, deserialize, safe_open, serialize, serialize_file
+from cryptotensors import numpy, deserialize, safe_open, serialize, serialize_file
 
 
 def save(

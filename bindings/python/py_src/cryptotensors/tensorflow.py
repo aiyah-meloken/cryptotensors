@@ -4,7 +4,7 @@ from typing import Dict, Optional, Union
 import numpy as np
 import tensorflow as tf
 
-from safetensors import numpy, safe_open
+from cryptotensors import numpy, safe_open
 
 
 def save(

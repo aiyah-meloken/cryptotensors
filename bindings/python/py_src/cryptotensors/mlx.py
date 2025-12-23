@@ -4,7 +4,7 @@ from typing import Dict, Optional, Union
 import numpy as np
 
 import mlx.core as mx
-from safetensors import numpy, safe_open
+from cryptotensors import numpy, safe_open
 
 
 def save(

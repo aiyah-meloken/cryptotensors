@@ -5,7 +5,7 @@ import numpy as np
 
 import jax.numpy as jnp
 from jax import Array
-from safetensors import numpy, safe_open
+from cryptotensors import numpy, safe_open
 
 
 def save(tensors: Dict[str, Array], metadata: Optional[Dict[str, str]] = None) -> bytes:

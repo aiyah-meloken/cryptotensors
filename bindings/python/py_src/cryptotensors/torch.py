@@ -6,7 +6,7 @@ from packaging.version import Version
 
 import torch
 
-from safetensors import deserialize, safe_open, serialize, serialize_file
+from cryptotensors import deserialize, safe_open, serialize, serialize_file
 
 
 def storage_ptr(tensor: torch.Tensor) -> int:

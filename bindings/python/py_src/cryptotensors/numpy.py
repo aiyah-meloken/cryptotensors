@@ -4,7 +4,7 @@ from typing import Dict, Optional, Union
 
 import numpy as np
 
-from safetensors import deserialize, safe_open, serialize, serialize_file
+from cryptotensors import deserialize, safe_open, serialize, serialize_file
 
 
 def _tobytes(tensor: np.ndarray) -> bytes:

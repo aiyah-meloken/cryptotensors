@@ -1,6 +1,7 @@
 # Ignore everything except benchmark reports
 *
 !.gitignore
+!index.html
 !README.md
 !dev/
 dev/*

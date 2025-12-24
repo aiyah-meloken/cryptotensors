@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.9"
 resolution-markers = [
     "python_full_version >= '3.12'",
@@ -174,6 +174,146 @@ sdist = { url = "https://files.pythonhosted.org/packages/d8/53/6f443c9a4a8358a93
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6", size = 25335, upload-time = "2022-10-25T02:36:20.889Z" },
 ]
+
+[[package]]
+name = "cryptotensors"
+source = { editable = "." }
+
+[package.optional-dependencies]
+all = [
+    { name = "flax", version = "0.8.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "flax", version = "0.10.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "h5py" },
+    { name = "huggingface-hub" },
+    { name = "hypothesis" },
+    { name = "jax", version = "0.4.30", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "jax", version = "0.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "jaxlib", version = "0.4.30", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "jaxlib", version = "0.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "paddlepaddle" },
+    { name = "pytest" },
+    { name = "pytest-benchmark" },
+    { name = "ruff" },
+    { name = "setuptools-rust" },
+    { name = "tensorflow" },
+    { name = "torch" },
+]
+dev = [
+    { name = "flax", version = "0.8.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "flax", version = "0.10.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "h5py" },
+    { name = "huggingface-hub" },
+    { name = "hypothesis" },
+    { name = "jax", version = "0.4.30", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "jax", version = "0.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "jaxlib", version = "0.4.30", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "jaxlib", version = "0.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "paddlepaddle" },
+    { name = "pytest" },
+    { name = "pytest-benchmark" },
+    { name = "ruff" },
+    { name = "setuptools-rust" },
+    { name = "tensorflow" },
+    { name = "torch" },
+]
+jax = [
+    { name = "flax", version = "0.8.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "flax", version = "0.10.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "jax", version = "0.4.30", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "jax", version = "0.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "jaxlib", version = "0.4.30", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "jaxlib", version = "0.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "numpy" },
+]
+mlx = [
+    { name = "mlx" },
+]
+numpy = [
+    { name = "numpy" },
+]
+paddlepaddle = [
+    { name = "numpy" },
+    { name = "paddlepaddle" },
+]
+pinned-tf = [
+    { name = "numpy" },
+    { name = "tensorflow" },
+]
+quality = [
+    { name = "ruff" },
+]
+tensorflow = [
+    { name = "numpy" },
+    { name = "tensorflow" },
+]
+testing = [
+    { name = "h5py" },
+    { name = "huggingface-hub" },
+    { name = "hypothesis" },
+    { name = "numpy" },
+    { name = "pytest" },
+    { name = "pytest-benchmark" },
+    { name = "setuptools-rust" },
+]
+testingfree = [
+    { name = "huggingface-hub" },
+    { name = "hypothesis" },
+    { name = "numpy" },
+    { name = "pytest" },
+    { name = "pytest-benchmark" },
+    { name = "setuptools-rust" },
+]
+torch = [
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "torch" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptotensors", extras = ["all"], marker = "extra == 'dev'" },
+    { name = "cryptotensors", extras = ["jax"], marker = "extra == 'all'" },
+    { name = "cryptotensors", extras = ["numpy"], marker = "extra == 'all'" },
+    { name = "cryptotensors", extras = ["numpy"], marker = "extra == 'jax'" },
+    { name = "cryptotensors", extras = ["numpy"], marker = "extra == 'paddlepaddle'" },
+    { name = "cryptotensors", extras = ["numpy"], marker = "extra == 'pinned-tf'" },
+    { name = "cryptotensors", extras = ["numpy"], marker = "extra == 'tensorflow'" },
+    { name = "cryptotensors", extras = ["numpy"], marker = "extra == 'testing'" },
+    { name = "cryptotensors", extras = ["numpy"], marker = "extra == 'testingfree'" },
+    { name = "cryptotensors", extras = ["numpy"], marker = "extra == 'torch'" },
+    { name = "cryptotensors", extras = ["paddlepaddle"], marker = "extra == 'all'" },
+    { name = "cryptotensors", extras = ["pinned-tf"], marker = "extra == 'all'" },
+    { name = "cryptotensors", extras = ["quality"], marker = "extra == 'all'" },
+    { name = "cryptotensors", extras = ["testing"], marker = "extra == 'all'" },
+    { name = "cryptotensors", extras = ["torch"], marker = "extra == 'all'" },
+    { name = "flax", marker = "extra == 'jax'", specifier = ">=0.6.3" },
+    { name = "h5py", marker = "extra == 'testing'", specifier = ">=3.7.0" },
+    { name = "huggingface-hub", marker = "extra == 'testing'", specifier = ">=0.12.1" },
+    { name = "huggingface-hub", marker = "extra == 'testingfree'", specifier = ">=0.12.1" },
+    { name = "hypothesis", marker = "extra == 'testing'", specifier = ">=6.70.2" },
+    { name = "hypothesis", marker = "extra == 'testingfree'", specifier = ">=6.70.2" },
+    { name = "jax", marker = "extra == 'jax'", specifier = ">=0.3.25" },
+    { name = "jaxlib", marker = "extra == 'jax'", specifier = ">=0.3.25" },
+    { name = "mlx", marker = "extra == 'mlx'", specifier = ">=0.0.9" },
+    { name = "numpy", marker = "extra == 'numpy'", specifier = ">=1.21.6" },
+    { name = "packaging", marker = "extra == 'torch'" },
+    { name = "paddlepaddle", marker = "extra == 'paddlepaddle'", specifier = ">=2.4.1" },
+    { name = "pytest", marker = "extra == 'testing'", specifier = ">=7.2.0" },
+    { name = "pytest", marker = "extra == 'testingfree'", specifier = ">=7.2.0" },
+    { name = "pytest-benchmark", marker = "extra == 'testing'", specifier = ">=4.0.0" },
+    { name = "pytest-benchmark", marker = "extra == 'testingfree'", specifier = ">=4.0.0" },
+    { name = "ruff", marker = "extra == 'quality'" },
+    { name = "setuptools-rust", marker = "extra == 'testing'", specifier = ">=1.5.2" },
+    { name = "setuptools-rust", marker = "extra == 'testingfree'", specifier = ">=1.5.2" },
+    { name = "tensorflow", marker = "extra == 'pinned-tf'", specifier = "==2.18.0" },
+    { name = "tensorflow", marker = "extra == 'tensorflow'", specifier = ">=2.11.0" },
+    { name = "torch", marker = "extra == 'torch'", specifier = ">=1.10" },
+]
+provides-extras = ["numpy", "torch", "tensorflow", "pinned-tf", "jax", "mlx", "paddlepaddle", "quality", "testing", "testingfree", "all", "dev"]
 
 [[package]]
 name = "decorator"
@@ -1668,146 +1808,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b4/71/26d45a5042bc71db22ddd8252ca9d01e9ca454f230e2996bb04f16d72799/ruff-0.12.7-py3-none-win_amd64.whl", hash = "sha256:9c18f3d707ee9edf89da76131956aba1270c6348bfee8f6c647de841eac7194f", size = 12912365, upload-time = "2025-07-29T22:32:31.517Z" },
     { url = "https://files.pythonhosted.org/packages/4c/9b/0b8aa09817b63e78d94b4977f18b1fcaead3165a5ee49251c5d5c245bb2d/ruff-0.12.7-py3-none-win_arm64.whl", hash = "sha256:dfce05101dbd11833a0776716d5d1578641b7fddb537fe7fa956ab85d1769b69", size = 11982083, upload-time = "2025-07-29T22:32:33.881Z" },
 ]
-
-[[package]]
-name = "safetensors"
-source = { editable = "." }
-
-[package.optional-dependencies]
-all = [
-    { name = "flax", version = "0.8.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "flax", version = "0.10.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "h5py" },
-    { name = "huggingface-hub" },
-    { name = "hypothesis" },
-    { name = "jax", version = "0.4.30", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "jax", version = "0.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "jaxlib", version = "0.4.30", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "jaxlib", version = "0.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "paddlepaddle" },
-    { name = "pytest" },
-    { name = "pytest-benchmark" },
-    { name = "ruff" },
-    { name = "setuptools-rust" },
-    { name = "tensorflow" },
-    { name = "torch" },
-]
-dev = [
-    { name = "flax", version = "0.8.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "flax", version = "0.10.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "h5py" },
-    { name = "huggingface-hub" },
-    { name = "hypothesis" },
-    { name = "jax", version = "0.4.30", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "jax", version = "0.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "jaxlib", version = "0.4.30", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "jaxlib", version = "0.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "paddlepaddle" },
-    { name = "pytest" },
-    { name = "pytest-benchmark" },
-    { name = "ruff" },
-    { name = "setuptools-rust" },
-    { name = "tensorflow" },
-    { name = "torch" },
-]
-jax = [
-    { name = "flax", version = "0.8.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "flax", version = "0.10.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "jax", version = "0.4.30", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "jax", version = "0.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "jaxlib", version = "0.4.30", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "jaxlib", version = "0.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "numpy" },
-]
-mlx = [
-    { name = "mlx" },
-]
-numpy = [
-    { name = "numpy" },
-]
-paddlepaddle = [
-    { name = "numpy" },
-    { name = "paddlepaddle" },
-]
-pinned-tf = [
-    { name = "numpy" },
-    { name = "tensorflow" },
-]
-quality = [
-    { name = "ruff" },
-]
-tensorflow = [
-    { name = "numpy" },
-    { name = "tensorflow" },
-]
-testing = [
-    { name = "h5py" },
-    { name = "huggingface-hub" },
-    { name = "hypothesis" },
-    { name = "numpy" },
-    { name = "pytest" },
-    { name = "pytest-benchmark" },
-    { name = "setuptools-rust" },
-]
-testingfree = [
-    { name = "huggingface-hub" },
-    { name = "hypothesis" },
-    { name = "numpy" },
-    { name = "pytest" },
-    { name = "pytest-benchmark" },
-    { name = "setuptools-rust" },
-]
-torch = [
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "torch" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "flax", marker = "extra == 'jax'", specifier = ">=0.6.3" },
-    { name = "h5py", marker = "extra == 'testing'", specifier = ">=3.7.0" },
-    { name = "huggingface-hub", marker = "extra == 'testing'", specifier = ">=0.12.1" },
-    { name = "huggingface-hub", marker = "extra == 'testingfree'", specifier = ">=0.12.1" },
-    { name = "hypothesis", marker = "extra == 'testing'", specifier = ">=6.70.2" },
-    { name = "hypothesis", marker = "extra == 'testingfree'", specifier = ">=6.70.2" },
-    { name = "jax", marker = "extra == 'jax'", specifier = ">=0.3.25" },
-    { name = "jaxlib", marker = "extra == 'jax'", specifier = ">=0.3.25" },
-    { name = "mlx", marker = "extra == 'mlx'", specifier = ">=0.0.9" },
-    { name = "numpy", marker = "extra == 'numpy'", specifier = ">=1.21.6" },
-    { name = "packaging", marker = "extra == 'torch'" },
-    { name = "paddlepaddle", marker = "extra == 'paddlepaddle'", specifier = ">=2.4.1" },
-    { name = "pytest", marker = "extra == 'testing'", specifier = ">=7.2.0" },
-    { name = "pytest", marker = "extra == 'testingfree'", specifier = ">=7.2.0" },
-    { name = "pytest-benchmark", marker = "extra == 'testing'", specifier = ">=4.0.0" },
-    { name = "pytest-benchmark", marker = "extra == 'testingfree'", specifier = ">=4.0.0" },
-    { name = "ruff", marker = "extra == 'quality'" },
-    { name = "safetensors", extras = ["all"], marker = "extra == 'dev'" },
-    { name = "safetensors", extras = ["jax"], marker = "extra == 'all'" },
-    { name = "safetensors", extras = ["numpy"], marker = "extra == 'all'" },
-    { name = "safetensors", extras = ["numpy"], marker = "extra == 'jax'" },
-    { name = "safetensors", extras = ["numpy"], marker = "extra == 'paddlepaddle'" },
-    { name = "safetensors", extras = ["numpy"], marker = "extra == 'pinned-tf'" },
-    { name = "safetensors", extras = ["numpy"], marker = "extra == 'tensorflow'" },
-    { name = "safetensors", extras = ["numpy"], marker = "extra == 'testing'" },
-    { name = "safetensors", extras = ["numpy"], marker = "extra == 'testingfree'" },
-    { name = "safetensors", extras = ["numpy"], marker = "extra == 'torch'" },
-    { name = "safetensors", extras = ["paddlepaddle"], marker = "extra == 'all'" },
-    { name = "safetensors", extras = ["pinned-tf"], marker = "extra == 'all'" },
-    { name = "safetensors", extras = ["quality"], marker = "extra == 'all'" },
-    { name = "safetensors", extras = ["testing"], marker = "extra == 'all'" },
-    { name = "safetensors", extras = ["torch"], marker = "extra == 'all'" },
-    { name = "setuptools-rust", marker = "extra == 'testing'", specifier = ">=1.5.2" },
-    { name = "setuptools-rust", marker = "extra == 'testingfree'", specifier = ">=1.5.2" },
-    { name = "tensorflow", marker = "extra == 'pinned-tf'", specifier = "==2.18.0" },
-    { name = "tensorflow", marker = "extra == 'tensorflow'", specifier = ">=2.11.0" },
-    { name = "torch", marker = "extra == 'torch'", specifier = ">=1.10" },
-]
-provides-extras = ["numpy", "torch", "tensorflow", "pinned-tf", "jax", "mlx", "paddlepaddle", "quality", "testing", "testingfree", "all", "dev"]
 
 [[package]]
 name = "scipy"

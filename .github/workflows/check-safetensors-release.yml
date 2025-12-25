@@ -12,8 +12,9 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write
   issues: write
+  pull-requests: read
 
 jobs:
   check-release:
@@ -22,6 +23,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Read current version from VERSION_BINDING.md
         id: current_version
@@ -97,6 +101,7 @@ jobs:
           RELEASE_URL=$(echo "$RELEASE_DATA" | jq -r '.html_url')
           RELEASE_BODY=$(echo "$RELEASE_DATA" | jq -r '.body' | head -n 50)
           RELEASE_DATE=$(echo "$RELEASE_DATA" | jq -r '.published_at')
+          RELEASE_TAG=$(echo "$RELEASE_DATA" | jq -r '.tag_name')
           
           # Validate extracted data
           if [ "$RELEASE_URL" = "null" ] || [ -z "$RELEASE_URL" ]; then
@@ -105,6 +110,10 @@ jobs:
           fi
           if [ "$RELEASE_DATE" = "null" ] || [ -z "$RELEASE_DATE" ]; then
             echo "Failed to get release date"
+            exit 1
+          fi
+          if [ "$RELEASE_TAG" = "null" ] || [ -z "$RELEASE_TAG" ]; then
+            echo "Failed to get release tag"
             exit 1
           fi
           if [ "$RELEASE_BODY" = "null" ]; then
@@ -116,6 +125,83 @@ jobs:
           echo "$RELEASE_BODY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           echo "release_date=$RELEASE_DATE" >> $GITHUB_OUTPUT
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Check if upstream branch exists
+        if: steps.version_check.outputs.needs_update == 'true' || github.event.inputs.test_mode == 'true'
+        id: check_branch
+        run: |
+          LATEST_VERSION="${{ steps.latest_release.outputs.latest }}"
+          TEST_MODE="${{ github.event.inputs.test_mode }}"
+          
+          # Add suffix for test mode
+          if [ "$TEST_MODE" = "true" ]; then
+            BRANCH_NAME="upstream/v${LATEST_VERSION}-test"
+          else
+            BRANCH_NAME="upstream/v${LATEST_VERSION}"
+          fi
+          
+          # Check if branch already exists
+          if git ls-remote --heads origin "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Branch $BRANCH_NAME already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Branch $BRANCH_NAME does not exist, will be created"
+          fi
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+      - name: Create upstream branch with upstream code
+        if: (steps.version_check.outputs.needs_update == 'true' || github.event.inputs.test_mode == 'true') && steps.check_branch.outputs.exists == 'false'
+        run: |
+          LATEST_VERSION="${{ steps.latest_release.outputs.latest }}"
+          RELEASE_TAG="${{ steps.release_details.outputs.release_tag }}"
+          TEST_MODE="${{ github.event.inputs.test_mode }}"
+          
+          # Add suffix for test mode
+          if [ "$TEST_MODE" = "true" ]; then
+            BRANCH_NAME="upstream/v${LATEST_VERSION}-test"
+            echo "🧪 Test mode: Creating test branch ${BRANCH_NAME}"
+          else
+            BRANCH_NAME="upstream/v${LATEST_VERSION}"
+            echo "Creating branch ${BRANCH_NAME}"
+          fi
+          
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add upstream remote if it doesn't exist
+          if ! git remote | grep -q "^upstream$"; then
+            echo "Adding upstream remote..."
+            git remote add upstream https://github.com/huggingface/safetensors.git
+          else
+            echo "Upstream remote already exists, updating..."
+            git remote set-url upstream https://github.com/huggingface/safetensors.git
+          fi
+          
+          # Fetch upstream tags and branches
+          echo "Fetching upstream tags and branches..."
+          git fetch upstream --tags
+          
+          # Check if the tag exists
+          # Note: git fetch --tags stores tags as local tags, not with upstream/ prefix
+          if ! git rev-parse --verify "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Error: Tag ${RELEASE_TAG} not found in upstream repository"
+            exit 1
+          fi
+          
+          # Create new branch from upstream tag
+          # This creates a branch pointing to the upstream tag commit
+          # Note: tags fetched from upstream are stored as local tags without upstream/ prefix
+          echo "Creating branch ${BRANCH_NAME} from upstream tag ${RELEASE_TAG}..."
+          git checkout -b "$BRANCH_NAME" "${RELEASE_TAG}"
+          
+          # Push the branch to origin
+          echo "Pushing branch ${BRANCH_NAME} to origin..."
+          git push origin "$BRANCH_NAME"
+          
+          echo "Successfully created and pushed branch ${BRANCH_NAME} with upstream code from ${RELEASE_TAG}"
 
       - name: Check for existing issue
         if: steps.version_check.outputs.needs_update == 'true' || github.event.inputs.test_mode == 'true'
@@ -144,6 +230,7 @@ jobs:
             }
 
       - name: Create or update issue
+        id: create_issue
         if: (steps.version_check.outputs.needs_update == 'true' || github.event.inputs.test_mode == 'true') && steps.existing_issue.outputs.exists == 'false'
         uses: actions/github-script@v7
         env:
@@ -160,6 +247,10 @@ jobs:
             
             const testPrefix = isTestMode ? '🧪 [TEST] ' : '';
             const title = `${testPrefix}🚨 Safetensors Version Update Alert: v${currentVersion} -> v${latestVersion}`;
+            const branchName = isTestMode 
+              ? `upstream/v${latestVersion}-test` 
+              : `upstream/v${latestVersion}`;
+            
             const bodyLines = [
               '## Version Update Detected',
               '',
@@ -180,8 +271,60 @@ jobs:
               releaseBody,
               '```',
               '',
-              '### Next Steps',
-              'Please check if VERSION_BINDING.md needs to be updated.',
+              '### Upstream Branch',
+              '',
+              'An upstream branch has been automatically created with the upstream code:',
+              `- **Branch**: \`${branchName}\``,
+              '',
+              isTestMode 
+                ? '### ⚠️ TEST MODE - No Action Required\n\n**This is a test issue. Please do not make any changes.** This issue is for testing purposes only and can be safely ignored or deleted.'
+                : [
+                    '### Tasks',
+                    '',
+                    'Please perform the following tasks to integrate the new safetensors version:',
+                    '',
+                    '#### 1. Analyze Changes Between Versions',
+                    '',
+                    `- Compare the differences between safetensors v${currentVersion} and v${latestVersion}`,
+                    '- Review the upstream branch to understand what has changed',
+                    '- Identify all modifications, additions, and deletions',
+                    '',
+                    '#### 2. Integrate Changes Carefully',
+                    '',
+                    '**⚠️ CRITICAL: Preserve cryptotensors functionality**',
+                    '',
+                    'When integrating upstream changes, you must:',
+                    '',
+                    '- **Preserve all cryptotensors encryption/decryption functionality**',
+                    '- **Maintain all custom features and modifications**',
+                    '- **Keep the cryptotensors-specific code intact**',
+                    '- **Do not overwrite or remove any cryptotensors enhancements**',
+                    '',
+                    '#### 3. Handle Uncertain Cases',
+                    '',
+                    'If you encounter changes that might conflict with cryptotensors functionality:',
+                    '',
+                    '- **Document the conflict** in the PR description',
+                    '- **Flag the issue** for manual review',
+                    '- **Do not proceed** if you are uncertain about the impact',
+                    '- **Ask for clarification** rather than making assumptions',
+                    '',
+                    '#### 4. Update Version Binding',
+                    '',
+                    `- Update \`VERSION_BINDING.md\` to reflect the new version v${latestVersion}`,
+                    '',
+                    '#### 5. Create Pull Request',
+                    '',
+                    '- Create a pull request with all the integrated changes',
+                    '- Include a detailed description of what was changed',
+                    '- Reference this issue in the PR',
+                    '',
+                    '### Important Notes',
+                    '',
+                    '- This repository is a fork/modification of safetensors with added encryption capabilities',
+                    '- The goal is to stay in sync with upstream while preserving cryptotensors features',
+                    '- When in doubt, preserve existing functionality and ask for guidance',
+                  ].join('\n'),
               '',
               '---',
               `*This issue was automatically created by GitHub Actions${isTestMode ? ' in TEST MODE' : ''}*`,
@@ -193,13 +336,43 @@ jobs:
               labels.push('test');
             }
 
-            await github.rest.issues.create({
+            const { data: issue } = await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: title,
               body: body,
               labels: labels
             });
+            
+            core.setOutput('issue_number', issue.number);
+
+      - name: Assign issue to GitHub Copilot Agent
+        # This step runs when:
+        # 1. A version update is detected (needs_update == 'true'), OR
+        # 2. Test mode is enabled (test_mode == 'true')
+        # In both cases, the issue will be assigned to the Copilot Agent to generate a PR
+        if: (steps.version_check.outputs.needs_update == 'true' || github.event.inputs.test_mode == 'true') && steps.existing_issue.outputs.exists == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = ${{ steps.create_issue.outputs.issue_number }};
+            // Default to github-copilot-agent[bot], can be overridden via repository variable COPILOT_AGENT
+            // If vars.COPILOT_AGENT is not set, it will be empty string, so we use the default
+            const customAgent = '${{ vars.COPILOT_AGENT }}'.trim();
+            const copilotAgent = customAgent || 'github-copilot-agent[bot]';
+            
+            try {
+              await github.rest.issues.addAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                assignees: [copilotAgent]
+              });
+              console.log(`Assigned issue #${issueNumber} to ${copilotAgent}`);
+            } catch (error) {
+              console.warn(`Failed to assign issue to ${copilotAgent}: ${error.message}`);
+              console.warn('This is not critical - the issue was still created successfully.');
+            }
 
       - name: Comment on existing issue
         if: (steps.version_check.outputs.needs_update == 'true' || github.event.inputs.test_mode == 'true') && steps.existing_issue.outputs.exists == 'true'

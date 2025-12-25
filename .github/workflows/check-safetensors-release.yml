@@ -1,0 +1,217 @@
+name: Check Safetensors Release
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # every day at 00:00 UTC
+  workflow_dispatch: # allow manual trigger
+    inputs:
+      test_mode:
+        description: 'Test mode: Create issue regardless of version check result'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-release:
+    name: Check for new safetensors release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read current version from VERSION_BINDING.md
+        id: current_version
+        run: |
+          VERSION_LINE=$(grep -E "^This repository is bound to safetensors v" VERSION_BINDING.md || echo "")
+          if [ -z "$VERSION_LINE" ]; then
+            echo "Could not find version in VERSION_BINDING.md"
+            exit 1
+          fi
+          CURRENT_VERSION=$(echo "$VERSION_LINE" | sed -E 's/.*v([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+          if [ -z "$CURRENT_VERSION" ] || ! echo "$CURRENT_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Failed to extract valid version number from: $VERSION_LINE"
+            exit 1
+          fi
+          echo "current=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "Current version: $CURRENT_VERSION"
+
+      - name: Get latest safetensors release
+        id: latest_release
+        run: |
+          LATEST_RELEASE=$(curl -s https://api.github.com/repos/huggingface/safetensors/releases/latest | jq -r '.tag_name // .name' | sed 's/^v//')
+          if [ -z "$LATEST_RELEASE" ] || [ "$LATEST_RELEASE" = "null" ]; then
+            echo "Failed to get latest release"
+            exit 1
+          fi
+          if ! echo "$LATEST_RELEASE" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "Invalid version format: $LATEST_RELEASE"
+            exit 1
+          fi
+          echo "latest=$LATEST_RELEASE" >> $GITHUB_OUTPUT
+          echo "Latest release: $LATEST_RELEASE"
+
+      - name: Compare versions
+        id: version_check
+        run: |
+          CURRENT="${{ steps.current_version.outputs.current }}"
+          LATEST="${{ steps.latest_release.outputs.latest }}"
+          
+          # Parse version number (major.minor.patch)
+          CURRENT_MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+          CURRENT_MINOR=$(echo "$CURRENT" | cut -d. -f2)
+          LATEST_MAJOR=$(echo "$LATEST" | cut -d. -f1)
+          LATEST_MINOR=$(echo "$LATEST" | cut -d. -f2)
+          
+          # Validate that major and minor are numeric
+          if ! echo "$CURRENT_MAJOR" | grep -qE '^[0-9]+$' || ! echo "$CURRENT_MINOR" | grep -qE '^[0-9]+$'; then
+            echo "Invalid current version components: major=$CURRENT_MAJOR, minor=$CURRENT_MINOR"
+            exit 1
+          fi
+          if ! echo "$LATEST_MAJOR" | grep -qE '^[0-9]+$' || ! echo "$LATEST_MINOR" | grep -qE '^[0-9]+$'; then
+            echo "Invalid latest version components: major=$LATEST_MAJOR, minor=$LATEST_MINOR"
+            exit 1
+          fi
+          
+          echo "Current: $CURRENT (major=$CURRENT_MAJOR, minor=$CURRENT_MINOR)"
+          echo "Latest: $LATEST (major=$LATEST_MAJOR, minor=$LATEST_MINOR)"
+          
+          # Check if major or minor version has changed
+          if [ "$LATEST_MAJOR" -gt "$CURRENT_MAJOR" ] || \
+             ([ "$LATEST_MAJOR" -eq "$CURRENT_MAJOR" ] && [ "$LATEST_MINOR" -gt "$CURRENT_MINOR" ]); then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "Version update detected: $CURRENT -> $LATEST"
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "No significant version change detected"
+          fi
+
+      - name: Get release details
+        if: steps.version_check.outputs.needs_update == 'true' || inputs.test_mode == 'true'
+        id: release_details
+        run: |
+          RELEASE_DATA=$(curl -s https://api.github.com/repos/huggingface/safetensors/releases/latest)
+          RELEASE_URL=$(echo "$RELEASE_DATA" | jq -r '.html_url')
+          RELEASE_BODY=$(echo "$RELEASE_DATA" | jq -r '.body' | head -n 50)
+          RELEASE_DATE=$(echo "$RELEASE_DATA" | jq -r '.published_at')
+          
+          # Validate extracted data
+          if [ "$RELEASE_URL" = "null" ] || [ -z "$RELEASE_URL" ]; then
+            echo "Failed to get release URL"
+            exit 1
+          fi
+          if [ "$RELEASE_DATE" = "null" ] || [ -z "$RELEASE_DATE" ]; then
+            echo "Failed to get release date"
+            exit 1
+          fi
+          if [ "$RELEASE_BODY" = "null" ]; then
+            RELEASE_BODY="No release notes available"
+          fi
+          
+          echo "release_url=$RELEASE_URL" >> $GITHUB_OUTPUT
+          echo "release_body<<EOF" >> $GITHUB_OUTPUT
+          echo "$RELEASE_BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "release_date=$RELEASE_DATE" >> $GITHUB_OUTPUT
+
+      - name: Check for existing issue
+        if: steps.version_check.outputs.needs_update == 'true' || inputs.test_mode == 'true'
+        id: existing_issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'safetensors-version-update'
+            });
+            
+            const latestVersion = '${{ steps.latest_release.outputs.latest }}';
+            const existingIssue = issues.find(issue => 
+              issue.title.includes(`Version Update Alert:`) && 
+              issue.title.includes(`-> v${latestVersion}`)
+            );
+            
+            if (existingIssue) {
+              core.setOutput('issue_number', existingIssue.number);
+              core.setOutput('exists', 'true');
+            } else {
+              core.setOutput('exists', 'false');
+            }
+
+      - name: Create or update issue
+        if: (steps.version_check.outputs.needs_update == 'true' || inputs.test_mode == 'true') && steps.existing_issue.outputs.exists == 'false'
+        uses: actions/github-script@v7
+        env:
+          RELEASE_BODY: ${{ steps.release_details.outputs.release_body }}
+        with:
+          script: |
+            const currentVersion = '${{ steps.current_version.outputs.current }}';
+            const latestVersion = '${{ steps.latest_release.outputs.latest }}';
+            const releaseUrl = '${{ steps.release_details.outputs.release_url }}';
+            const releaseDate = '${{ steps.release_details.outputs.release_date }}';
+            const releaseBody = process.env.RELEASE_BODY;
+            const isTestMode = '${{ inputs.test_mode }}' === 'true';
+            
+            const testPrefix = isTestMode ? '🧪 [TEST] ' : '';
+            const title = `${testPrefix}🚨 Safetensors Version Update Alert: v${currentVersion} -> v${latestVersion}`;
+            const body = `## Version Update Detected
+
+${isTestMode ? '> **⚠️ This is a TEST MODE issue and can be deleted**\n\n' : ''}A new version of HuggingFace safetensors has been released!
+
+### Version Information
+- **Current Bound Version**: v${currentVersion}
+- **Latest Release Version**: v${latestVersion}
+- **Release Date**: ${releaseDate}
+
+### Related Links
+- [Release Page](${releaseUrl})
+- [Upstream Repository](https://github.com/huggingface/safetensors)
+
+### Release Notes
+\`\`\`
+${releaseBody}
+\`\`\`
+
+### Next Steps
+Please check if VERSION_BINDING.md needs to be updated.
+
+---
+*This issue was automatically created by GitHub Actions${isTestMode ? ' in TEST MODE' : ''}*`;
+
+            const labels = ['safetensors-version-update', 'automated'];
+            if (isTestMode) {
+              labels.push('test');
+            }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: labels
+            });
+
+      - name: Comment on existing issue
+        if: (steps.version_check.outputs.needs_update == 'true' || inputs.test_mode == 'true') && steps.existing_issue.outputs.exists == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = ${{ steps.existing_issue.outputs.issue_number }};
+            const latestVersion = '${{ steps.latest_release.outputs.latest }}';
+            const releaseDate = '${{ steps.release_details.outputs.release_date }}';
+            const isTestMode = '${{ inputs.test_mode }}' === 'true';
+            
+            const testPrefix = isTestMode ? '🧪 [TEST MODE] ' : '';
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: `${testPrefix}🔄 Version v${latestVersion} is still available (${releaseDate}). Please check if an update is needed.`
+            });
+

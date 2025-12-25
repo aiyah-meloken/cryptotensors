@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1766632667041,
+  "lastUpdate": 1766632912247,
   "repoUrl": "https://github.com/aiyah-meloken/cryptotensors",
   "entries": {
     "Benchmark": [
@@ -282,6 +282,100 @@ window.BENCHMARK_DATA = {
             "unit": "iter/sec",
             "range": "stddev: 0.0040970832612352475",
             "extra": "mean: 289.42751260002524 msec\nrounds: 5"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aiyah_meloken@protonmail.com",
+            "name": "aiyah-meloken",
+            "username": "aiyah-meloken"
+          },
+          "committer": {
+            "email": "aiyah_meloken@protonmail.com",
+            "name": "aiyah-meloken",
+            "username": "aiyah-meloken"
+          },
+          "distinct": true,
+          "id": "da5ebc009f49e7134620f17bb1fbf861d0431557",
+          "message": "fix: update GitHub Actions workflow to use github.event.inputs for test mode checks",
+          "timestamp": "2025-12-25T11:18:37+08:00",
+          "tree_id": "97fc29fe70faad7f7fd847289eb7ef7934601dd1",
+          "url": "https://github.com/aiyah-meloken/cryptotensors/commit/da5ebc009f49e7134620f17bb1fbf861d0431557"
+        },
+        "date": 1766632911871,
+        "tool": "pytest",
+        "benches": [
+          {
+            "name": "benches/test_flax.py::test_flax_flax_load",
+            "value": 2.9951183943044732,
+            "unit": "iter/sec",
+            "range": "stddev: 0.006356082481131397",
+            "extra": "mean: 333.8766180000107 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_flax.py::test_flax_sf_load",
+            "value": 4.852239378393978,
+            "unit": "iter/sec",
+            "range": "stddev: 0.021792878768963728",
+            "extra": "mean: 206.0904093999966 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_paddle.py::test_paddle_paddle_load",
+            "value": 7.7470086249642,
+            "unit": "iter/sec",
+            "range": "stddev: 0.002808548928346203",
+            "extra": "mean: 129.08208166666668 msec\nrounds: 6"
+          },
+          {
+            "name": "benches/test_paddle.py::test_paddle_sf_load",
+            "value": 5.035141004340476,
+            "unit": "iter/sec",
+            "range": "stddev: 0.002464178415205442",
+            "extra": "mean: 198.6041699999987 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_pt.py::test_pt_pt_load_cpu",
+            "value": 9.761872503795699,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0014342661645633805",
+            "extra": "mean: 102.43936290001443 msec\nrounds: 10"
+          },
+          {
+            "name": "benches/test_pt.py::test_pt_sf_load_cpu",
+            "value": 265.40531872803103,
+            "unit": "iter/sec",
+            "range": "stddev: 0.00006701891960375765",
+            "extra": "mean: 3.7678220044441937 msec\nrounds: 225"
+          },
+          {
+            "name": "benches/test_pt.py::test_pt_pt_load_cpu_small",
+            "value": 11.488478834528001,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0008949132234219036",
+            "extra": "mean: 87.04372566667 msec\nrounds: 12"
+          },
+          {
+            "name": "benches/test_pt.py::test_pt_sf_load_cpu_small",
+            "value": 52.73131585480716,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0002292286465312078",
+            "extra": "mean: 18.964063076928447 msec\nrounds: 52"
+          },
+          {
+            "name": "benches/test_tf.py::test_tf_tf_load",
+            "value": 3.3698215839670405,
+            "unit": "iter/sec",
+            "range": "stddev: 0.008616515295825945",
+            "extra": "mean: 296.7516158000194 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_tf.py::test_tf_sf_load",
+            "value": 3.5131625916779057,
+            "unit": "iter/sec",
+            "range": "stddev: 0.024379205038192096",
+            "extra": "mean: 284.64381420001246 msec\nrounds: 5"
           }
         ]
       }

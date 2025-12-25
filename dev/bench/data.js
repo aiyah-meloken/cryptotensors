@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1766561422285,
+  "lastUpdate": 1766632432139,
   "repoUrl": "https://github.com/aiyah-meloken/cryptotensors",
   "entries": {
     "Benchmark": [
@@ -94,6 +94,100 @@ window.BENCHMARK_DATA = {
             "unit": "iter/sec",
             "range": "stddev: 0.0026179372925535954",
             "extra": "mean: 288.1978478000178 msec\nrounds: 5"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aiyah_meloken@protonmail.com",
+            "name": "aiyah-meloken",
+            "username": "aiyah-meloken"
+          },
+          "committer": {
+            "email": "aiyah_meloken@protonmail.com",
+            "name": "aiyah-meloken",
+            "username": "aiyah-meloken"
+          },
+          "distinct": true,
+          "id": "ed1b870d8e4aea9552d40f9a3bcac740fff38fa5",
+          "message": "feat: add GitHub Actions workflow to check for Safetensors releases\n\n- Introduced a new workflow that checks for new Safetensors releases daily and allows manual triggering.\n- The workflow reads the current version from VERSION_BINDING.md, fetches the latest release from GitHub, and compares versions.\n- If a new version is detected, it creates or updates an issue in the repository with release details.\n- Includes a test mode for manual issue creation regardless of version changes.",
+          "timestamp": "2025-12-25T11:10:25+08:00",
+          "tree_id": "882417b36da3649b457171ce72221c9094429d67",
+          "url": "https://github.com/aiyah-meloken/cryptotensors/commit/ed1b870d8e4aea9552d40f9a3bcac740fff38fa5"
+        },
+        "date": 1766632431236,
+        "tool": "pytest",
+        "benches": [
+          {
+            "name": "benches/test_flax.py::test_flax_flax_load",
+            "value": 1.8999838694788203,
+            "unit": "iter/sec",
+            "range": "stddev: 0.011866575945370486",
+            "extra": "mean: 526.3202578000346 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_flax.py::test_flax_sf_load",
+            "value": 4.46339307950531,
+            "unit": "iter/sec",
+            "range": "stddev: 0.010776861087456605",
+            "extra": "mean: 224.04479780007023 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_paddle.py::test_paddle_paddle_load",
+            "value": 3.1397977884823187,
+            "unit": "iter/sec",
+            "range": "stddev: 0.02806660945747909",
+            "extra": "mean: 318.4918479999851 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_paddle.py::test_paddle_sf_load",
+            "value": 3.255234902916476,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0017601945035026247",
+            "extra": "mean: 307.19749260001663 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_pt.py::test_pt_pt_load_cpu",
+            "value": 5.424432720311787,
+            "unit": "iter/sec",
+            "range": "stddev: 0.016692428608719848",
+            "extra": "mean: 184.35107440000138 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_pt.py::test_pt_sf_load_cpu",
+            "value": 306.3011567435464,
+            "unit": "iter/sec",
+            "range": "stddev: 0.00003777126470349146",
+            "extra": "mean: 3.264760768883611 msec\nrounds: 225"
+          },
+          {
+            "name": "benches/test_pt.py::test_pt_pt_load_cpu_small",
+            "value": 14.08238737377391,
+            "unit": "iter/sec",
+            "range": "stddev: 0.00029867539133659397",
+            "extra": "mean: 71.01068685713992 msec\nrounds: 14"
+          },
+          {
+            "name": "benches/test_pt.py::test_pt_sf_load_cpu_small",
+            "value": 55.279586211899336,
+            "unit": "iter/sec",
+            "range": "stddev: 0.00006945213968333419",
+            "extra": "mean: 18.08986044444636 msec\nrounds: 54"
+          },
+          {
+            "name": "benches/test_tf.py::test_tf_tf_load",
+            "value": 2.6632089777093273,
+            "unit": "iter/sec",
+            "range": "stddev: 0.01939613213116517",
+            "extra": "mean: 375.4868687999533 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_tf.py::test_tf_sf_load",
+            "value": 2.982726245469218,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0031923088765644925",
+            "extra": "mean: 335.26375460000963 msec\nrounds: 5"
           }
         ]
       }

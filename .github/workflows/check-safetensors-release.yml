@@ -90,7 +90,7 @@ jobs:
           fi
 
       - name: Get release details
-        if: steps.version_check.outputs.needs_update == 'true' || inputs.test_mode == 'true'
+        if: steps.version_check.outputs.needs_update == 'true' || github.event.inputs.test_mode == 'true'
         id: release_details
         run: |
           RELEASE_DATA=$(curl -s https://api.github.com/repos/huggingface/safetensors/releases/latest)
@@ -118,7 +118,7 @@ jobs:
           echo "release_date=$RELEASE_DATE" >> $GITHUB_OUTPUT
 
       - name: Check for existing issue
-        if: steps.version_check.outputs.needs_update == 'true' || inputs.test_mode == 'true'
+        if: steps.version_check.outputs.needs_update == 'true' || github.event.inputs.test_mode == 'true'
         id: existing_issue
         uses: actions/github-script@v7
         with:
@@ -144,10 +144,11 @@ jobs:
             }
 
       - name: Create or update issue
-        if: (steps.version_check.outputs.needs_update == 'true' || inputs.test_mode == 'true') && steps.existing_issue.outputs.exists == 'false'
+        if: (steps.version_check.outputs.needs_update == 'true' || github.event.inputs.test_mode == 'true') && steps.existing_issue.outputs.exists == 'false'
         uses: actions/github-script@v7
         env:
           RELEASE_BODY: ${{ steps.release_details.outputs.release_body }}
+          TEST_MODE: ${{ github.event.inputs.test_mode }}
         with:
           script: |
             const currentVersion = '${{ steps.current_version.outputs.current }}';
@@ -155,7 +156,7 @@ jobs:
             const releaseUrl = '${{ steps.release_details.outputs.release_url }}';
             const releaseDate = '${{ steps.release_details.outputs.release_date }}';
             const releaseBody = process.env.RELEASE_BODY;
-            const isTestMode = '${{ inputs.test_mode }}' === 'true';
+            const isTestMode = process.env.TEST_MODE === 'true';
             
             const testPrefix = isTestMode ? '🧪 [TEST] ' : '';
             const title = `${testPrefix}🚨 Safetensors Version Update Alert: v${currentVersion} -> v${latestVersion}`;
@@ -201,14 +202,16 @@ jobs:
             });
 
       - name: Comment on existing issue
-        if: (steps.version_check.outputs.needs_update == 'true' || inputs.test_mode == 'true') && steps.existing_issue.outputs.exists == 'true'
+        if: (steps.version_check.outputs.needs_update == 'true' || github.event.inputs.test_mode == 'true') && steps.existing_issue.outputs.exists == 'true'
         uses: actions/github-script@v7
+        env:
+          TEST_MODE: ${{ github.event.inputs.test_mode }}
         with:
           script: |
             const issueNumber = ${{ steps.existing_issue.outputs.issue_number }};
             const latestVersion = '${{ steps.latest_release.outputs.latest }}';
             const releaseDate = '${{ steps.release_details.outputs.release_date }}';
-            const isTestMode = '${{ inputs.test_mode }}' === 'true';
+            const isTestMode = process.env.TEST_MODE === 'true';
             
             const testPrefix = isTestMode ? '🧪 [TEST MODE] ' : '';
             

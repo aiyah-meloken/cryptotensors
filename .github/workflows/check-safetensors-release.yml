@@ -356,10 +356,10 @@ jobs:
         with:
           script: |
             const issueNumber = ${{ steps.create_issue.outputs.issue_number }};
-            // Default to github-copilot-agent[bot], can be overridden via repository variable COPILOT_AGENT
+            // Default to 'copilot' (GitHub Copilot Coding Agent), can be overridden via repository variable COPILOT_AGENT
             // If vars.COPILOT_AGENT is not set, it will be empty string, so we use the default
             const customAgent = '${{ vars.COPILOT_AGENT }}'.trim();
-            const copilotAgent = customAgent || 'github-copilot-agent[bot]';
+            const copilotAgent = customAgent || 'copilot';
             
             try {
               await github.rest.issues.addAssignees({

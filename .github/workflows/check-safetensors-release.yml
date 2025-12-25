@@ -159,29 +159,33 @@ jobs:
             
             const testPrefix = isTestMode ? '🧪 [TEST] ' : '';
             const title = `${testPrefix}🚨 Safetensors Version Update Alert: v${currentVersion} -> v${latestVersion}`;
-            const body = `## Version Update Detected
-
-${isTestMode ? '> **⚠️ This is a TEST MODE issue and can be deleted**\n\n' : ''}A new version of HuggingFace safetensors has been released!
-
-### Version Information
-- **Current Bound Version**: v${currentVersion}
-- **Latest Release Version**: v${latestVersion}
-- **Release Date**: ${releaseDate}
-
-### Related Links
-- [Release Page](${releaseUrl})
-- [Upstream Repository](https://github.com/huggingface/safetensors)
-
-### Release Notes
-\`\`\`
-${releaseBody}
-\`\`\`
-
-### Next Steps
-Please check if VERSION_BINDING.md needs to be updated.
-
----
-*This issue was automatically created by GitHub Actions${isTestMode ? ' in TEST MODE' : ''}*`;
+            const bodyLines = [
+              '## Version Update Detected',
+              '',
+              isTestMode ? '> **⚠️ This is a TEST MODE issue and can be deleted**' : '',
+              'A new version of HuggingFace safetensors has been released!',
+              '',
+              '### Version Information',
+              `- **Current Bound Version**: v${currentVersion}`,
+              `- **Latest Release Version**: v${latestVersion}`,
+              `- **Release Date**: ${releaseDate}`,
+              '',
+              '### Related Links',
+              `- [Release Page](${releaseUrl})`,
+              '- [Upstream Repository](https://github.com/huggingface/safetensors)',
+              '',
+              '### Release Notes',
+              '```',
+              releaseBody,
+              '```',
+              '',
+              '### Next Steps',
+              'Please check if VERSION_BINDING.md needs to be updated.',
+              '',
+              '---',
+              `*This issue was automatically created by GitHub Actions${isTestMode ? ' in TEST MODE' : ''}*`,
+            ].filter(Boolean);
+            const body = bodyLines.join('\n');
 
             const labels = ['safetensors-version-update', 'automated'];
             if (isTestMode) {

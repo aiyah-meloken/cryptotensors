@@ -81,7 +81,8 @@ testingfree = [
     "pytest-benchmark>=4.0.0",
     # "python-afl>=0.7.3",
     "hypothesis>=6.70.2",
-    "cryptography>=41.0.0",
+    # cryptography is not compatible with freethreaded Python 3.13
+    # freethreaded tests don't use encryption features
 ]
 all = [
     "cryptotensors[torch]",

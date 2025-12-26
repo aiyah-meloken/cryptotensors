@@ -16,7 +16,7 @@ if HAS_MLX:
     import cryptotensors
     from cryptotensors.mlx import load_file, save_file
     from cryptotensors import safe_open
-    from .crypto_utils import generate_test_keys, create_crypto_config
+    from crypto_utils import generate_test_keys, create_crypto_config
 
 @unittest.skipIf(platform.system() != "Darwin", "MLX only available on macOS")
 @unittest.skipIf(not HAS_MLX, "MLX not installed")

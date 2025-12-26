@@ -5,7 +5,7 @@ import numpy as np
 import cryptotensors
 from cryptotensors.numpy import load_file, save_file
 from cryptotensors import safe_open
-from .crypto_utils import generate_test_keys, create_crypto_config
+from crypto_utils import generate_test_keys, create_crypto_config
 
 class CryptoNumpyTestCase(unittest.TestCase):
     def setUp(self):

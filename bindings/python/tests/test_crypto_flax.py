@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import cryptotensors
 from cryptotensors.flax import load_file, save_file
 from cryptotensors import safe_open
-from .crypto_utils import generate_test_keys, create_crypto_config
+from crypto_utils import generate_test_keys, create_crypto_config
 
 class CryptoFlaxTestCase(unittest.TestCase):
     def setUp(self):

@@ -6,7 +6,7 @@ import paddle
 import cryptotensors
 from cryptotensors.paddle import load_file, save_file
 from cryptotensors import safe_open
-from .crypto_utils import generate_test_keys, create_crypto_config
+from crypto_utils import generate_test_keys, create_crypto_config
 
 class CryptoPaddleTestCase(unittest.TestCase):
     def setUp(self):

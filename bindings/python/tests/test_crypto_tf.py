@@ -6,7 +6,7 @@ import tensorflow as tf
 import cryptotensors
 from cryptotensors.tensorflow import load_file, save_file
 from cryptotensors import safe_open
-from .crypto_utils import generate_test_keys, create_crypto_config
+from crypto_utils import generate_test_keys, create_crypto_config
 
 class CryptoTfTestCase(unittest.TestCase):
     def setUp(self):
@@ -34,7 +34,10 @@ class CryptoTfTestCase(unittest.TestCase):
 
         for k, v in self.data.items():
             tv = reloaded[k]
-            self.assertTrue(np.allclose(v.numpy(), tv.numpy()))
+            # Handle both TensorFlow tensors and numpy arrays
+            v_np = v.numpy() if hasattr(v, 'numpy') else v
+            tv_np = tv.numpy() if hasattr(tv, 'numpy') else tv
+            self.assertTrue(np.allclose(v_np, tv_np))
 
     def test_roundtrip_algorithms(self):
         algos = ["aes128gcm", "aes256gcm", "chacha20poly1305"]
@@ -48,13 +51,20 @@ class CryptoTfTestCase(unittest.TestCase):
                     keys["sign_key"]
                 ])
                 try:
+                    # Create a copy of self.data to avoid modifying the original
+                    # since _tf2np modifies the dict in place
+                    data_copy = {k: v for k, v in self.data.items()}
                     with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
-                        save_file(self.data, f.name, config=config)
+                        save_file(data_copy, f.name, config=config)
                         reloaded = load_file(f.name)
                         os.unlink(f.name)
                     
                     for k, v in self.data.items():
-                        self.assertTrue(np.allclose(v.numpy(), reloaded[k].numpy()))
+                        tv = reloaded[k]
+                        # Handle both TensorFlow tensors and numpy arrays
+                        v_np = v.numpy() if hasattr(v, 'numpy') else v
+                        tv_np = tv.numpy() if hasattr(tv, 'numpy') else tv
+                        self.assertTrue(np.allclose(v_np, tv_np))
                 finally:
                     cryptotensors.disable_provider("temp")
 
@@ -74,7 +84,11 @@ class CryptoTfTestCase(unittest.TestCase):
             os.unlink(f.name)
 
         for k, v in self.data.items():
-            self.assertTrue(np.allclose(v.numpy(), reloaded[k].numpy()))
+            tv = reloaded[k]
+            # Handle both TensorFlow tensors and numpy arrays
+            v_np = v.numpy() if hasattr(v, 'numpy') else v
+            tv_np = tv.numpy() if hasattr(tv, 'numpy') else tv
+            self.assertTrue(np.allclose(v_np, tv_np))
 
     def test_bfloat16_encrypted(self):
         # bfloat16 is often used in models
@@ -84,5 +98,8 @@ class CryptoTfTestCase(unittest.TestCase):
             reloaded = load_file(f.name)
             os.unlink(f.name)
         
-        self.assertTrue(np.allclose(data["bf16"].numpy(), reloaded["bf16"].numpy()))
+        # Handle both TensorFlow tensors and numpy arrays
+        v_np = data["bf16"].numpy() if hasattr(data["bf16"], 'numpy') else data["bf16"]
+        tv_np = reloaded["bf16"].numpy() if hasattr(reloaded["bf16"], 'numpy') else reloaded["bf16"]
+        self.assertTrue(np.allclose(v_np, tv_np))
 

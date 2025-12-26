@@ -5,7 +5,7 @@ import torch
 import numpy as np
 import cryptotensors
 from cryptotensors.torch import load_file, save_file, safe_open
-from .crypto_utils import generate_test_keys, create_crypto_config
+from crypto_utils import generate_test_keys, create_crypto_config
 
 class CryptoPtTestCase(unittest.TestCase):
     def setUp(self):

@@ -2,7 +2,7 @@ name: Check Safetensors Release
 
 on:
   schedule:
-    - cron: '0 0 * * *' # every day at 00:00 UTC
+    - cron: '0 17 * * *' # every day at 01:00 Beijing time (UTC+8)
   workflow_dispatch: # allow manual trigger
     inputs:
       test_mode:

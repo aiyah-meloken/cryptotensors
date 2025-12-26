@@ -6,22 +6,24 @@ import numpy as np
 
 HAS_MLX = False
 if platform.system() == "Darwin":
+    # This platform is not supported, we don't want to crash on import
+    # This test will be skipped anyway.
     try:
         import mlx.core as mx
 
         HAS_MLX = True
     except ImportError:
         pass
+    if HAS_MLX:
+        import cryptotensors
+        from cryptotensors.mlx import load_file, save_file
+        from cryptotensors import safe_open
+        from crypto_utils import generate_test_keys, create_crypto_config
 
-if HAS_MLX:
-    import cryptotensors
-    from cryptotensors.mlx import load_file, save_file
-    from cryptotensors import safe_open
-    from crypto_utils import generate_test_keys, create_crypto_config
 
-
-@unittest.skipIf(platform.system() != "Darwin", "MLX only available on macOS")
-@unittest.skipIf(not HAS_MLX, "MLX not installed")
+# MLX only exists on Mac
+@unittest.skipIf(platform.system() != "Darwin", "Mlx is not available on non Mac")
+@unittest.skipIf(not HAS_MLX, "Mlx is not available.")
 class CryptoMlxTestCase(unittest.TestCase):
     def setUp(self):
         self.data = {

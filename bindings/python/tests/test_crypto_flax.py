@@ -1,14 +1,21 @@
 import os
+import platform
 import tempfile
 import unittest
 import numpy as np
-import jax.numpy as jnp
-import cryptotensors
-from cryptotensors.flax import load_file, save_file
-from cryptotensors import safe_open
-from crypto_utils import generate_test_keys, create_crypto_config
+
+if platform.system() != "Windows":
+    # This platform is not supported, we don't want to crash on import
+    # This test will be skipped anyway.
+    import jax.numpy as jnp
+    import cryptotensors
+    from cryptotensors.flax import load_file, save_file
+    from cryptotensors import safe_open
+    from crypto_utils import generate_test_keys, create_crypto_config
 
 
+# Jax doesn't not exist on Windows
+@unittest.skipIf(platform.system() == "Windows", "Flax is not available on Windows")
 class CryptoFlaxTestCase(unittest.TestCase):
     def setUp(self):
         self.data = {

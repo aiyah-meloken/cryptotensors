@@ -33,13 +33,20 @@ pub use key::KeyMaterial;
 pub use policy::AccessPolicy;
 pub use registry::{
     KeyProvider, 
-    FileKeyProvider, 
-    EnvKeyProvider, 
-    DefaultPathKeyProvider, 
-    JkuKeyProvider,
+    TempKeyProvider,
     register_provider,
-    register_default_providers,
+    register_provider_with_priority,
+    disable_provider,
+    enable_provider,
+    PRIORITY_TEMP,
+    PRIORITY_FILE,
+    PRIORITY_ENV,
 };
+
+#[cfg(feature = "provider-file")]
+pub use registry::FileKeyProvider;
+#[cfg(feature = "provider-env")]
+pub use registry::EnvKeyProvider;
 
 #[cfg(not(feature = "std"))]
 #[macro_use]

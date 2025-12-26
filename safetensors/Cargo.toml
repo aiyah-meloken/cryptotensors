@@ -46,10 +46,14 @@ proptest = "1.7"
 tempfile = "3.10"
 
 [features]
-default = ["std"]
+default = ["std", "provider-env", "provider-file"]
 std = ["serde/default", "serde_json/default"]
 # Kept for backward compatibility - no-op since alloc is always available
 alloc = []
+
+# Provider features
+provider-env = []
+provider-file = []
 
 [[bench]]
 name = "benchmark"

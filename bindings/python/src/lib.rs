@@ -30,6 +30,60 @@ use std::sync::OnceLock;
 use safetensors::cryptotensors::{SerializeCryptoConfig, CryptoTensors};
 use safetensors::key::KeyMaterial;
 use safetensors::policy::AccessPolicy;
+use safetensors::registry::{self, TempKeyProvider, PRIORITY_TEMP};
+
+/// MODIFIED: Disable and remove a key provider by name.
+#[pyfunction]
+fn disable_provider(name: &str) -> PyResult<()> {
+    registry::disable_provider(name);
+    Ok(())
+}
+
+/// MODIFIED: Internal function to register a temporary key provider with parsed keys.
+#[pyfunction]
+fn _register_key_provider_internal(keys: Vec<PyBound<PyAny>>) -> PyResult<()> {
+    let mut json_keys = Vec::with_capacity(keys.len());
+    for key in keys {
+        json_keys.push(pyany_to_json(&key)?);
+    }
+    
+    let provider = TempKeyProvider::new(json_keys);
+    registry::register_provider_with_priority(Box::new(provider), PRIORITY_TEMP);
+    Ok(())
+}
+
+/// MODIFIED: Helper to convert PyAny to serde_json::Value.
+fn pyany_to_json(obj: &PyBound<PyAny>) -> PyResult<serde_json::Value> {
+    if let Ok(dict) = obj.downcast::<PyDict>() {
+        let mut map = serde_json::Map::new();
+        for (k, v) in dict.iter() {
+            let key = k.extract::<String>()?;
+            let value = pyany_to_json(&v)?;
+            map.insert(key, value);
+        }
+        Ok(serde_json::Value::Object(map))
+    } else if let Ok(list) = obj.downcast::<PyList>() {
+        let mut vec = Vec::with_capacity(list.len());
+        for item in list.iter() {
+            vec.push(pyany_to_json(&item)?);
+        }
+        Ok(serde_json::Value::Array(vec))
+    } else if let Ok(s) = obj.extract::<String>() {
+        Ok(serde_json::Value::String(s))
+    } else if let Ok(b) = obj.extract::<bool>() {
+        Ok(serde_json::Value::Bool(b))
+    } else if let Ok(i) = obj.extract::<i64>() {
+        Ok(serde_json::Value::Number(i.into()))
+    } else if let Ok(f) = obj.extract::<f64>() {
+        Ok(serde_json::Number::from_f64(f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null))
+    } else if obj.is_none() {
+        Ok(serde_json::Value::Null)
+    } else {
+        Err(PyException::new_err(format!("Unsupported type for JSON conversion: {}", obj)))
+    }
+}
 
 static TORCH_MODULE: OnceLock<Py<PyModule>> = OnceLock::new();
 static NUMPY_MODULE: OnceLock<Py<PyModule>> = OnceLock::new();
@@ -1903,6 +1957,8 @@ fn _safetensors_rust(m: &PyBound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(serialize, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_file, m)?)?;
     m.add_function(wrap_pyfunction!(deserialize, m)?)?;
+    m.add_function(wrap_pyfunction!(disable_provider, m)?)?;
+    m.add_function(wrap_pyfunction!(_register_key_provider_internal, m)?)?;
     m.add_class::<safe_open>()?;
     m.add_class::<_safe_open_handle>()?;
     m.add("SafetensorError", m.py().get_type::<SafetensorError>())?;

@@ -138,22 +138,46 @@ impl KeyMaterial {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// use safetensors::registry::{register_provider, FileKeyProvider};
+    /// ```no_run
     /// use safetensors::key::KeyMaterial;
     ///
-    /// // Register a provider first
-    /// register_provider(Box::new(FileKeyProvider::new("/path/to/keys.jwk")));
+    /// fn example() -> Result<(), Box<dyn std::error::Error>> {
+    ///     // Set CRYPTOTENSOR_KEYS environment variable with JWK Set
+    ///     // EnvKeyProvider is automatically registered and enabled by default
+    ///     std::env::set_var("CRYPTOTENSOR_KEYS", r#"{
+    ///         "keys": [
+    ///             {
+    ///                 "kty": "oct",
+    ///                 "alg": "aes256gcm",
+    ///                 "kid": "my-enc-key",
+    ///                 "k": "dGVzdC1rZXktMzItYnl0ZXMtbG9uZy1lbmNyeXB0aW9u"
+    ///             },
+    ///             {
+    ///                 "kty": "okp",
+    ///                 "alg": "ed25519",
+    ///                 "kid": "my-sign-key",
+    ///                 "x": "dGVzdC1wdWJsaWMta2V5LTMyLWJ5dGVzLWxvbmctc2lnbmF0dXJl",
+    ///                 "d": "dGVzdC1wcml2YXRlLWtleS0zMi1ieXRlcy1sb25nLXNpZ25hdHVyZQ"
+    ///             }
+    ///         ]
+    ///     }"#);
     ///
-    /// // Then load key
-    /// let key = KeyMaterial::new_enc_key(Some("aes256gcm"), None, None)?;
-    /// key.load_key()?;
+    ///     // Create key material with kid to match the key in environment variable
+    ///     let key = KeyMaterial::new_enc_key(
+    ///         None,
+    ///         Some("aes256gcm".to_string()),
+    ///         Some("my-enc-key".to_string()),  // kid matches the key in CRYPTOTENSOR_KEYS
+    ///         None
+    ///     )?;
+    ///     key.load_key()?;  // Loads key from EnvKeyProvider
+    ///     Ok(())
+    /// }
     /// ```
     pub fn load_key(&self) -> Result<(), CryptoTensorsError> {
         // Get key from registry based on key type
         let jwk = match self.key_type {
-            JwkKeyType::Oct => registry::get_master_key()?,
-            JwkKeyType::Okp => registry::get_verify_key()?,
+            JwkKeyType::Oct => registry::get_master_key(self.jku.as_deref(), self.kid.as_deref())?,
+            JwkKeyType::Okp => registry::get_verify_key(self.jku.as_deref(), self.kid.as_deref())?,
         };
         
         // Parse and validate the JWK

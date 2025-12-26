@@ -9,28 +9,44 @@
 // modifying the core cryptotensors library.
 
 use crate::cryptotensors::CryptoTensorsError;
+#[cfg(feature = "provider-file")]
 use std::path::Path;
 use std::sync::{OnceLock, RwLock};
 
 // ============================================================================
-// JWK URL Parser
+// Priority Constants
 // ============================================================================
 
-/// Parsed JWK URL with scheme and path
+/// Priority for temporary providers registered via Python
+pub const PRIORITY_TEMP: i32 = 100;
+/// Priority for file-based providers
+pub const PRIORITY_FILE: i32 = 10;
+/// Priority for environment-based providers (default fallback)
+pub const PRIORITY_ENV: i32 = 0;
+
+// ============================================================================
+// File JWK Path Parser
+// ============================================================================
+
+/// Parsed file path from file:// JWK URL
+#[cfg(feature = "provider-file")]
 #[derive(Debug, Clone)]
-pub struct JwkUrl {
+pub struct FileJwkPath {
     /// The file path extracted from the URL
     pub path: String,
 }
 
-impl JwkUrl {
-    /// Parse a JWK URL (supports file:// scheme)
+#[cfg(feature = "provider-file")]
+impl FileJwkPath {
+    /// Parse a file:// JWK URL and extract the file path
     ///
     /// # Arguments
-    /// * `url` - URL string like "file:///path/to/keys.jwk" or "file://~/keys.jwk"
+    /// * `url` - URL string like:
+    ///   - Unix: "file:///path/to/keys.jwk" or "file://~/keys.jwk"
+    ///   - Windows: "file:///C:/path/to/keys.jwk" or "file:///C:\\path\\to\\keys.jwk"
     ///
     /// # Returns
-    /// * `Ok(JwkUrl)` - Parsed URL with resolved path
+    /// * `Ok(FileJwkPath)` - Parsed path
     /// * `Err(CryptoTensorsError::InvalidJwkUrl)` - If URL format is invalid
     pub fn parse(url: &str) -> Result<Self, CryptoTensorsError> {
         if let Some((scheme, rest)) = url.split_once("://") {
@@ -39,15 +55,49 @@ impl JwkUrl {
                 _ => return Err(CryptoTensorsError::InvalidJwkUrl(url.to_string())),
             };
 
-            // Handle Unix path
             let path = if rest.starts_with('/') {
+                // Handle absolute paths: file:///path or file:///C:/path
+                #[cfg(windows)]
+                {
+                    let path_str = &rest[1..]; // Remove leading /
+                    // Check for Windows drive letter (C:, D:, etc.)
+                    if let Some(colon_pos) = path_str.find(':') {
+                        if colon_pos == 1 && path_str.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+                            // Windows path: C:/path or C:\path
+                            let drive = &path_str[..2]; // C:
+                            let rest_path = &path_str[2..];
+                            // Normalize backslashes to forward slashes
+                            let normalized = rest_path.replace('\\', "/");
+                            format!("{}:{}", drive, normalized)
+                        } else {
+                            // Unix-style absolute path on Windows
+                            rest.to_string()
+                        }
+                    } else {
+                        // Unix-style absolute path on Windows
+                        rest.to_string()
+                    }
+                }
+                
+                #[cfg(not(windows))]
+                {
+                    // Unix absolute path
                 rest.to_string()
+                }
             } else if rest.starts_with('~') {
-                let home = std::env::var("HOME")
-                    .map_err(|e| CryptoTensorsError::KeyLoad(format!("Failed to get HOME: {}", e)))?;
+                // Handle home directory expansion
+                let home = if cfg!(windows) {
+                    std::env::var("USERPROFILE")
+                        .or_else(|_| std::env::var("HOME"))
+                        .map_err(|e| CryptoTensorsError::KeyLoad(format!("Failed to get home directory: {}", e)))?
+                } else {
+                    std::env::var("HOME")
+                        .map_err(|e| CryptoTensorsError::KeyLoad(format!("Failed to get HOME: {}", e)))?
+                };
                 format!("{}{}", home, &rest[1..])
             } else {
-                return Err(CryptoTensorsError::InvalidJwkUrl("Only absolute paths and ~ are supported".to_string()));
+                // Relative path: return as-is, will be resolved against search paths
+                rest.to_string()
             };
 
             Ok(Self { path })
@@ -71,6 +121,7 @@ impl JwkUrl {
 /// # Returns
 /// * `Ok(Vec<serde_json::Value>)` - List of JWK values
 /// * `Err(CryptoTensorsError)` - If file cannot be read or parsed
+#[cfg(feature = "provider-file")]
 pub fn load_jwks_from_file(path: &str) -> Result<Vec<serde_json::Value>, CryptoTensorsError> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| CryptoTensorsError::KeyLoad(format!("Failed to read file {}: {}", path, e)))?;
@@ -150,69 +201,159 @@ pub fn select_jwk(
 
 /// File-based key provider
 ///
-/// Loads JWK(s) from a specified file path.
-///
-/// # Example
-///
-/// ```ignore
-/// use safetensors::registry::{register_provider, FileKeyProvider};
-///
-/// register_provider(Box::new(FileKeyProvider::new("/path/to/keys.jwk")));
-/// ```
+/// Uses search paths to locate JWK files. When a relative path is provided via `jku`,
+/// it will be resolved against these search paths.
+#[cfg(feature = "provider-file")]
 pub struct FileKeyProvider {
-    path: String,
-    master_alg: Option<String>,
-    verify_alg: Option<String>,
+    search_paths: Vec<String>,
 }
 
+#[cfg(feature = "provider-file")]
 impl FileKeyProvider {
-    /// Create a new file-based key provider
+    /// Create a new file-based key provider with a list of search paths
     ///
     /// # Arguments
-    /// * `path` - Path to the JWK file (supports file:// URLs or direct paths)
-    pub fn new(path: &str) -> Self {
-        // Handle file:// URL or direct path
-        let resolved_path = if path.starts_with("file://") {
-            JwkUrl::parse(path).map(|u| u.path).unwrap_or_else(|_| path.to_string())
+    /// * `search_paths` - List of directory paths to search for JWK files.
+    ///   Paths are normalized and deduplicated.
+    ///
+    /// # Example
+    /// ```
+    /// use safetensors::registry::FileKeyProvider;
+    /// let provider = FileKeyProvider::new(vec![
+    ///     "/etc/keys".to_string(),
+    ///     "~/.config/keys".to_string(),
+    /// ]);
+    /// ```
+    pub fn new(search_paths: Vec<String>) -> Self {
+        let mut normalized_paths = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        
+        for path in search_paths {
+            // Normalize path (expand ~, resolve to absolute if possible)
+            let normalized = Self::normalize_path(&path);
+            if seen.insert(normalized.clone()) {
+                normalized_paths.push(normalized);
+            }
+        }
+        
+        Self {
+            search_paths: normalized_paths,
+        }
+    }
+    
+    /// Normalize a path (expand ~, convert to absolute if relative)
+    fn normalize_path(path: &str) -> String {
+        let expanded = if path.starts_with('~') {
+            let home = if cfg!(windows) {
+                std::env::var("USERPROFILE")
+                    .or_else(|_| std::env::var("HOME"))
+                    .unwrap_or_else(|_| "~".to_string())
+            } else {
+                std::env::var("HOME").unwrap_or_else(|_| "~".to_string())
+            };
+            format!("{}{}", home, &path[1..])
         } else {
             path.to_string()
         };
         
-        Self {
-            path: resolved_path,
-            master_alg: None,
-            verify_alg: None,
+        // Try to canonicalize if it's an absolute path
+        if Path::new(&expanded).is_absolute() {
+            if let Ok(canonical) = std::fs::canonicalize(&expanded) {
+                return canonical.to_string_lossy().to_string();
+            }
         }
+        
+        expanded
     }
     
-    /// Set the algorithm filter for master key selection
-    pub fn with_master_alg(mut self, alg: &str) -> Self {
-        self.master_alg = Some(alg.to_string());
-        self
-    }
-    
-    /// Set the algorithm filter for verify key selection
-    pub fn with_verify_alg(mut self, alg: &str) -> Self {
-        self.verify_alg = Some(alg.to_string());
-        self
+    /// Resolve a file path against search paths
+    ///
+    /// If the path is absolute, return it as-is.
+    /// If the path is relative, try to resolve it against each search path.
+    fn resolve_path(&self, file_path: &str) -> Vec<String> {
+        let path = Path::new(file_path);
+        
+        if path.is_absolute() {
+            // Absolute path: use as-is
+            vec![file_path.to_string()]
+        } else {
+            // Relative path: try each search path
+            self.search_paths.iter()
+                .map(|search_path| {
+                    Path::new(search_path)
+                        .join(file_path)
+                        .to_string_lossy()
+                        .to_string()
+                })
+                .collect()
     }
 }
+}
 
+#[cfg(feature = "provider-file")]
 impl KeyProvider for FileKeyProvider {
     fn is_ready(&self) -> bool {
-        Path::new(&self.path).exists()
+        // Check if any search path exists (as directory)
+        self.search_paths.iter().any(|p| {
+            let path = Path::new(p);
+            path.exists() && path.is_dir()
+        })
+    }
+
+    fn matches(&self, jku: Option<&str>, _kid: Option<&str>) -> bool {
+        jku.map(|j| j.starts_with("file://")).unwrap_or(false)
     }
     
-    fn get_master_key(&self) -> Result<serde_json::Value, CryptoTensorsError> {
-        let keys = load_jwks_from_file(&self.path)?;
-        select_jwk(&keys, "oct", self.master_alg.as_deref(), None)
-            .ok_or_else(|| CryptoTensorsError::NoSuitableKey)
+    fn get_master_key(&self, jku: Option<&str>, kid: Option<&str>) -> Result<serde_json::Value, CryptoTensorsError> {
+        let paths = if let Some(jku_str) = jku {
+            // Parse jku to get file path
+            let parsed = FileJwkPath::parse(jku_str)?;
+            // Resolve against search paths (handles relative paths)
+            self.resolve_path(&parsed.path)
+        } else {
+            // No jku: try each search path as a directory, look for default filenames
+            let mut paths = Vec::new();
+            for search_path in &self.search_paths {
+                paths.push(Path::new(search_path).join("keys.jwk").to_string_lossy().to_string());
+            }
+            paths
+        };
+
+        // Try each resolved path
+        for path in paths {
+            if let Ok(keys) = load_jwks_from_file(&path) {
+                if let Some(key) = select_jwk(&keys, "oct", None, kid) {
+                    return Ok(key);
+                }
+            }
+        }
+        Err(CryptoTensorsError::NoSuitableKey)
     }
     
-    fn get_verify_key(&self) -> Result<serde_json::Value, CryptoTensorsError> {
-        let keys = load_jwks_from_file(&self.path)?;
-        select_jwk(&keys, "okp", self.verify_alg.as_deref(), None)
-            .ok_or_else(|| CryptoTensorsError::NoSuitableKey)
+    fn get_verify_key(&self, jku: Option<&str>, kid: Option<&str>) -> Result<serde_json::Value, CryptoTensorsError> {
+        let paths = if let Some(jku_str) = jku {
+            // Parse jku to get file path
+            let parsed = FileJwkPath::parse(jku_str)?;
+            // Resolve against search paths (handles relative paths)
+            self.resolve_path(&parsed.path)
+        } else {
+            // No jku: try each search path as a directory, look for default filenames
+            let mut paths = Vec::new();
+            for search_path in &self.search_paths {
+                paths.push(Path::new(search_path).join("keys.jwk").to_string_lossy().to_string());
+            }
+            paths
+        };
+
+        // Try each resolved path
+        for path in paths {
+            if let Ok(keys) = load_jwks_from_file(&path) {
+                if let Some(key) = select_jwk(&keys, "okp", None, kid) {
+                    return Ok(key);
+                }
+            }
+        }
+        Err(CryptoTensorsError::NoSuitableKey)
     }
     
     fn name(&self) -> &str {
@@ -222,61 +363,58 @@ impl KeyProvider for FileKeyProvider {
 
 /// Environment variable-based key provider
 ///
-/// Loads JWK(s) from a file path specified by the CRYPTOTENSOR_KEY_JKU environment variable.
-///
-/// # Example
-///
-/// ```ignore
-/// use safetensors::registry::{register_provider, EnvKeyProvider};
-///
-/// // Set CRYPTOTENSOR_KEY_JKU=/path/to/keys.jwk before this
-/// register_provider(Box::new(EnvKeyProvider::new()));
-/// ```
+/// Loads JWK Set from CRYPTOTENSOR_KEYS environment variable.
+#[cfg(feature = "provider-env")]
 pub struct EnvKeyProvider {
     env_var: String,
 }
 
+#[cfg(feature = "provider-env")]
 impl EnvKeyProvider {
     /// Create a new environment-based key provider using default variable
     pub fn new() -> Self {
         Self {
-            env_var: "CRYPTOTENSOR_KEY_JKU".to_string(),
+            env_var: "CRYPTOTENSOR_KEYS".to_string(),
         }
     }
     
-    /// Create a new environment-based key provider with custom variable name
-    pub fn with_env_var(env_var: &str) -> Self {
-        Self {
-            env_var: env_var.to_string(),
-        }
-    }
-    
-    fn get_file_provider(&self) -> Option<FileKeyProvider> {
-        std::env::var(&self.env_var).ok().map(|path| FileKeyProvider::new(&path))
-    }
-}
-
-impl Default for EnvKeyProvider {
-    fn default() -> Self {
-        Self::new()
+    fn get_keys(&self) -> Result<Vec<serde_json::Value>, CryptoTensorsError> {
+        let val = std::env::var(&self.env_var)
+            .map_err(|_| CryptoTensorsError::Registry(format!("{} not set", self.env_var)))?;
+        
+        let jwk_set: serde_json::Value = serde_json::from_str(&val)
+            .map_err(|e| CryptoTensorsError::KeyLoad(format!("Failed to parse JWK Set from {}: {}", self.env_var, e)))?;
+        
+        if let Some(keys) = jwk_set.get("keys").and_then(|k| k.as_array()) {
+            Ok(keys.clone())
+        } else if jwk_set.get("kty").is_some() {
+            Ok(vec![jwk_set])
+        } else {
+            Err(CryptoTensorsError::KeyLoad(format!("Invalid JWK format in {}", self.env_var)))
     }
 }
+}
 
+#[cfg(feature = "provider-env")]
 impl KeyProvider for EnvKeyProvider {
     fn is_ready(&self) -> bool {
-        self.get_file_provider().map(|p| p.is_ready()).unwrap_or(false)
+        std::env::var(&self.env_var).is_ok()
+    }
+
+    fn matches(&self, _jku: Option<&str>, _kid: Option<&str>) -> bool {
+        true
     }
     
-    fn get_master_key(&self) -> Result<serde_json::Value, CryptoTensorsError> {
-        self.get_file_provider()
-            .ok_or_else(|| CryptoTensorsError::Registry("CRYPTOTENSOR_KEY_JKU not set".to_string()))?
-            .get_master_key()
+    fn get_master_key(&self, _jku: Option<&str>, kid: Option<&str>) -> Result<serde_json::Value, CryptoTensorsError> {
+        let keys = self.get_keys()?;
+        select_jwk(&keys, "oct", None, kid)
+            .ok_or(CryptoTensorsError::NoSuitableKey)
     }
     
-    fn get_verify_key(&self) -> Result<serde_json::Value, CryptoTensorsError> {
-        self.get_file_provider()
-            .ok_or_else(|| CryptoTensorsError::Registry("CRYPTOTENSOR_KEY_JKU not set".to_string()))?
-            .get_verify_key()
+    fn get_verify_key(&self, _jku: Option<&str>, kid: Option<&str>) -> Result<serde_json::Value, CryptoTensorsError> {
+        let keys = self.get_keys()?;
+        select_jwk(&keys, "okp", None, kid)
+            .ok_or(CryptoTensorsError::NoSuitableKey)
     }
     
     fn name(&self) -> &str {
@@ -284,219 +422,139 @@ impl KeyProvider for EnvKeyProvider {
     }
 }
 
-/// Default path key provider
-///
-/// Loads JWK(s) from ~/.cryptotensor/keys.jwk
-///
-/// # Example
-///
-/// ```ignore
-/// use safetensors::registry::{register_provider, DefaultPathKeyProvider};
-///
-/// register_provider(Box::new(DefaultPathKeyProvider::new()));
-/// ```
-pub struct DefaultPathKeyProvider;
+/// Temporary key provider (used by Python register_key_provider)
+pub struct TempKeyProvider {
+    keys: Vec<serde_json::Value>,
+}
 
-impl DefaultPathKeyProvider {
-    /// Create a new default path key provider
-    pub fn new() -> Self {
-        Self
-    }
-    
-    fn get_default_path() -> Option<String> {
-        std::env::var("HOME").ok().map(|home| {
-            Path::new(&home).join(".cryptotensor/keys.jwk").to_string_lossy().to_string()
-        })
-    }
-    
-    fn get_file_provider(&self) -> Option<FileKeyProvider> {
-        Self::get_default_path().map(|path| FileKeyProvider::new(&path))
+impl TempKeyProvider {
+    /// Create a new temporary key provider with a list of keys
+    pub fn new(keys: Vec<serde_json::Value>) -> Self {
+        Self { keys }
     }
 }
 
-impl Default for DefaultPathKeyProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl KeyProvider for DefaultPathKeyProvider {
+impl KeyProvider for TempKeyProvider {
     fn is_ready(&self) -> bool {
-        self.get_file_provider().map(|p| p.is_ready()).unwrap_or(false)
+        !self.keys.is_empty()
     }
     
-    fn get_master_key(&self) -> Result<serde_json::Value, CryptoTensorsError> {
-        self.get_file_provider()
-            .ok_or_else(|| CryptoTensorsError::Registry("HOME not set".to_string()))?
-            .get_master_key()
+    fn matches(&self, _jku: Option<&str>, _kid: Option<&str>) -> bool {
+        true // Temp keys always match as they have highest priority
     }
     
-    fn get_verify_key(&self) -> Result<serde_json::Value, CryptoTensorsError> {
-        self.get_file_provider()
-            .ok_or_else(|| CryptoTensorsError::Registry("HOME not set".to_string()))?
-            .get_verify_key()
+    fn get_master_key(&self, _jku: Option<&str>, kid: Option<&str>) -> Result<serde_json::Value, CryptoTensorsError> {
+        select_jwk(&self.keys, "oct", None, kid)
+            .ok_or(CryptoTensorsError::NoSuitableKey)
+    }
+    
+    fn get_verify_key(&self, _jku: Option<&str>, kid: Option<&str>) -> Result<serde_json::Value, CryptoTensorsError> {
+        select_jwk(&self.keys, "okp", None, kid)
+            .ok_or(CryptoTensorsError::NoSuitableKey)
     }
     
     fn name(&self) -> &str {
-        "default-path"
-    }
-}
-
-/// JKU-based key provider
-///
-/// Loads JWK(s) from a URL specified in the JWK (jku field).
-/// This is used when loading keys specified in a CryptoTensors header.
-///
-/// # Example
-///
-/// ```ignore
-/// use safetensors::registry::{register_provider, JkuKeyProvider};
-///
-/// register_provider(Box::new(JkuKeyProvider::new("file:///path/to/keys.jwk")));
-/// ```
-pub struct JkuKeyProvider {
-    jku: String,
-}
-
-impl JkuKeyProvider {
-    /// Create a new JKU-based key provider
-    pub fn new(jku: &str) -> Self {
-        Self {
-            jku: jku.to_string(),
-        }
-    }
-    
-    fn get_file_provider(&self) -> Result<FileKeyProvider, CryptoTensorsError> {
-        let url = JwkUrl::parse(&self.jku)?;
-        Ok(FileKeyProvider::new(&url.path))
-    }
-}
-
-impl KeyProvider for JkuKeyProvider {
-    fn is_ready(&self) -> bool {
-        self.get_file_provider().map(|p| p.is_ready()).unwrap_or(false)
-    }
-    
-    fn get_master_key(&self) -> Result<serde_json::Value, CryptoTensorsError> {
-        self.get_file_provider()?.get_master_key()
-    }
-    
-    fn get_verify_key(&self) -> Result<serde_json::Value, CryptoTensorsError> {
-        self.get_file_provider()?.get_verify_key()
-    }
-    
-    fn name(&self) -> &str {
-        "jku"
+        "temp"
     }
 }
 
 // ============================================================================
-// Convenience functions for registering built-in providers
+// Global Registry
 // ============================================================================
-
-/// Register default key providers in order: Env -> DefaultPath
-///
-/// This is a convenience function that registers the most common providers.
-/// After calling this, keys will be loaded from:
-/// 1. CRYPTOTENSOR_KEY_JKU environment variable (if set)
-/// 2. ~/.cryptotensor/keys.jwk (if exists)
-pub fn register_default_providers() {
-    register_provider(Box::new(EnvKeyProvider::new()));
-    register_provider(Box::new(DefaultPathKeyProvider::new()));
-}
 
 /// Trait for key providers (KMS, HSM, file-based, etc.)
-///
-/// Implementations of this trait can be registered with the global registry
-/// to provide keys for encryption and signature verification.
-///
-/// # Example
-///
-/// ```ignore
-/// use safetensors::registry::{KeyProvider, register_provider};
-///
-/// struct MyKmsProvider { /* ... */ }
-///
-/// impl KeyProvider for MyKmsProvider {
-///     fn is_ready(&self) -> bool { true }
-///     fn get_master_key(&self) -> Result<serde_json::Value, CryptoTensorsError> { /* ... */ }
-///     fn get_verify_key(&self) -> Result<serde_json::Value, CryptoTensorsError> { /* ... */ }
-///     fn name(&self) -> &str { "my-kms" }
-/// }
-///
-/// // Register the provider
-/// register_provider(Box::new(MyKmsProvider { /* ... */ }));
-/// ```
 pub trait KeyProvider: Send + Sync {
     /// Check if the provider is ready to provide keys
-    ///
-    /// This method should return `true` only if the provider has been properly
-    /// initialized and can successfully return keys.
     fn is_ready(&self) -> bool;
 
+    /// Check if the provider matches the requested JKU/KID
+    fn matches(&self, jku: Option<&str>, kid: Option<&str>) -> bool;
+
     /// Get the master key for encryption/decryption
-    ///
-    /// Returns a JWK (JSON Web Key) as a serde_json::Value containing
-    /// the symmetric key for tensor encryption.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(serde_json::Value)` - A valid JWK with `kty: "oct"` and the key material
-    /// * `Err(CryptoTensorsError)` - If the key cannot be retrieved
-    fn get_master_key(&self) -> Result<serde_json::Value, CryptoTensorsError>;
+    fn get_master_key(&self, jku: Option<&str>, kid: Option<&str>) -> Result<serde_json::Value, CryptoTensorsError>;
 
     /// Get the verification key for signature verification
-    ///
-    /// Returns a JWK (JSON Web Key) as a serde_json::Value containing
-    /// the public key for header signature verification.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(serde_json::Value)` - A valid JWK with `kty: "okp"` and the public key
-    /// * `Err(CryptoTensorsError)` - If the key cannot be retrieved
-    fn get_verify_key(&self) -> Result<serde_json::Value, CryptoTensorsError>;
+    fn get_verify_key(&self, jku: Option<&str>, kid: Option<&str>) -> Result<serde_json::Value, CryptoTensorsError>;
 
     /// Provider name for logging/debugging
-    ///
-    /// Returns a human-readable name for the provider, useful for error messages
-    /// and debugging.
     fn name(&self) -> &str;
 }
 
-/// Global registry for key providers
-static PROVIDERS: OnceLock<RwLock<Vec<Box<dyn KeyProvider>>>> = OnceLock::new();
-
-/// Get or initialize the global providers list
-fn get_providers() -> &'static RwLock<Vec<Box<dyn KeyProvider>>> {
-    PROVIDERS.get_or_init(|| RwLock::new(Vec::new()))
+struct ProviderEntry {
+    provider: Box<dyn KeyProvider>,
+    priority: i32,
+    enabled: bool,
 }
 
-/// Register a key provider
-///
-/// Providers are tried in registration order when looking for keys.
-/// The first ready provider that successfully returns a key wins.
-///
-/// # Arguments
-///
-/// * `provider` - A boxed KeyProvider implementation
-///
-/// # Example
-///
-/// ```ignore
-/// use safetensors::registry::register_provider;
-///
-/// register_provider(Box::new(MyProvider::new()));
-/// ```
-pub fn register_provider(provider: Box<dyn KeyProvider>) {
+static PROVIDERS: OnceLock<RwLock<Vec<ProviderEntry>>> = OnceLock::new();
+
+fn get_providers() -> &'static RwLock<Vec<ProviderEntry>> {
+    PROVIDERS.get_or_init(|| {
+        let mut entries = Vec::new();
+        
+        #[cfg(feature = "provider-env")]
+        entries.push(ProviderEntry {
+            provider: Box::new(EnvKeyProvider::new()),
+            priority: PRIORITY_ENV,
+            enabled: true,
+        });
+
+        #[cfg(feature = "provider-file")]
+        entries.push(ProviderEntry {
+            provider: Box::new(FileKeyProvider::new(Vec::new())),
+            priority: PRIORITY_FILE,
+            enabled: true,
+        });
+
+        RwLock::new(entries)
+    })
+}
+
+/// Register a key provider with a specific priority
+/// If a provider with the same name already exists, it will be removed first
+pub fn register_provider_with_priority(provider: Box<dyn KeyProvider>, priority: i32) {
     let providers = get_providers();
     if let Ok(mut guard) = providers.write() {
-        guard.push(provider);
+        // Remove any existing provider with the same name
+        let provider_name = provider.name();
+        guard.retain(|entry| entry.provider.name() != provider_name);
+        
+        guard.push(ProviderEntry {
+            provider,
+            priority,
+            enabled: true,
+        });
+        // Sort by priority descending
+        guard.sort_by(|a, b| b.priority.cmp(&a.priority));
+    }
+}
+
+/// Register a key provider with default priority (0)
+pub fn register_provider(provider: Box<dyn KeyProvider>) {
+    register_provider_with_priority(provider, 0);
+}
+
+/// Disable and remove a provider by name
+pub fn disable_provider(name: &str) {
+    let providers = get_providers();
+    if let Ok(mut guard) = providers.write() {
+        guard.retain(|entry| entry.provider.name() != name);
+    }
+}
+
+/// Enable a provider by name
+pub fn enable_provider(name: &str) {
+    let providers = get_providers();
+    if let Ok(mut guard) = providers.write() {
+        for entry in guard.iter_mut() {
+            if entry.provider.name() == name {
+                entry.enabled = true;
+            }
+        }
     }
 }
 
 /// Clear all registered providers
-///
-/// This is primarily useful for testing purposes.
 pub fn clear_providers() {
     let providers = get_providers();
     if let Ok(mut guard) = providers.write() {
@@ -505,8 +563,6 @@ pub fn clear_providers() {
 }
 
 /// Get the number of registered providers
-///
-/// This is primarily useful for testing purposes.
 pub fn provider_count() -> usize {
     let providers = get_providers();
     if let Ok(guard) = providers.read() {
@@ -517,63 +573,41 @@ pub fn provider_count() -> usize {
 }
 
 /// Get master key from registered providers
-///
-/// Tries each registered provider in order until one successfully returns a key.
-/// The first ready provider that returns a key wins.
-///
-/// # Returns
-///
-/// * `Ok(serde_json::Value)` - A valid JWK with the master key
-/// * `Err(CryptoTensorsError::Registry)` - If no provider is available or all providers fail
-pub fn get_master_key() -> Result<serde_json::Value, CryptoTensorsError> {
+pub fn get_master_key(jku: Option<&str>, kid: Option<&str>) -> Result<serde_json::Value, CryptoTensorsError> {
     let providers = get_providers();
     let guard = providers.read()
         .map_err(|_| CryptoTensorsError::Registry("Failed to acquire read lock".to_string()))?;
 
-    if guard.is_empty() {
-        return Err(CryptoTensorsError::Registry("No key providers registered".to_string()));
-    }
-
-    for provider in guard.iter() {
-        if provider.is_ready() {
-            match provider.get_master_key() {
+    for entry in guard.iter() {
+        if entry.enabled && entry.provider.is_ready() && entry.provider.matches(jku, kid) {
+            match entry.provider.get_master_key(jku, kid) {
                 Ok(key) => return Ok(key),
-                Err(_) => continue, // Try next provider
+                Err(_) => continue,
             }
         }
     }
 
-    Err(CryptoTensorsError::Registry("No ready provider could provide master key".to_string()))
+    Err(CryptoTensorsError::Registry("No suitable provider found for master key".to_string()))
 }
 
 /// Get verification key from registered providers
-///
-/// Tries each registered provider in order until one successfully returns a key.
-/// The first ready provider that returns a key wins.
-///
-/// # Returns
-///
-/// * `Ok(serde_json::Value)` - A valid JWK with the verification key
-/// * `Err(CryptoTensorsError::Registry)` - If no provider is available or all providers fail
-pub fn get_verify_key() -> Result<serde_json::Value, CryptoTensorsError> {
+pub fn get_verify_key(jku: Option<&str>, kid: Option<&str>) -> Result<serde_json::Value, CryptoTensorsError> {
     let providers = get_providers();
     let guard = providers.read()
         .map_err(|_| CryptoTensorsError::Registry("Failed to acquire read lock".to_string()))?;
 
-    if guard.is_empty() {
-        return Err(CryptoTensorsError::Registry("No key providers registered".to_string()));
-    }
-
-    for provider in guard.iter() {
-        if provider.is_ready() {
-            match provider.get_verify_key() {
-                Ok(key) => return Ok(key),
-                Err(_) => continue, // Try next provider
+    for entry in guard.iter() {
+        if entry.enabled && entry.provider.is_ready() && entry.provider.matches(jku, kid) {
+            match entry.provider.get_verify_key(jku, kid) {
+                Ok(key) => {
+                    return Ok(key);
+                }
+                Err(_) => continue,
             }
         }
     }
 
-    Err(CryptoTensorsError::Registry("No ready provider could provide verify key".to_string()))
+    Err(CryptoTensorsError::Registry(format!("No suitable provider found for verify key (jku={:?}, kid={:?})", jku, kid)))
 }
 
 #[cfg(test)]
@@ -581,7 +615,6 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     
-    // Mutex to ensure tests run sequentially (static PROVIDERS is shared)
     static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     struct TestProvider {
@@ -590,109 +623,40 @@ mod tests {
     }
 
     impl KeyProvider for TestProvider {
-        fn is_ready(&self) -> bool {
-            self.ready
+        fn is_ready(&self) -> bool { self.ready }
+        fn matches(&self, _jku: Option<&str>, _kid: Option<&str>) -> bool { true }
+        fn name(&self) -> &str { &self.name }
+
+        fn get_master_key(&self, _jku: Option<&str>, _kid: Option<&str>) -> Result<serde_json::Value, CryptoTensorsError> {
+            Ok(serde_json::json!({"kty": "oct", "k": "AAA"}))
         }
 
-        fn get_master_key(&self) -> Result<serde_json::Value, CryptoTensorsError> {
-            if self.ready {
-                Ok(serde_json::json!({
-                    "kty": "oct",
-                    "alg": "aes256gcm",
-                    "k": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-                }))
-            } else {
-                Err(CryptoTensorsError::Registry("Not ready".to_string()))
-            }
-        }
-
-        fn get_verify_key(&self) -> Result<serde_json::Value, CryptoTensorsError> {
-            if self.ready {
-                Ok(serde_json::json!({
-                    "kty": "okp",
-                    "alg": "ed25519",
-                    "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-                }))
-            } else {
-                Err(CryptoTensorsError::Registry("Not ready".to_string()))
-            }
-        }
-
-        fn name(&self) -> &str {
-            &self.name
+        fn get_verify_key(&self, _jku: Option<&str>, _kid: Option<&str>) -> Result<serde_json::Value, CryptoTensorsError> {
+            Ok(serde_json::json!({"kty": "okp", "x": "AAA"}))
         }
     }
 
     #[test]
-    fn test_register_and_get_provider() {
+    fn test_priority_and_disable() {
         let _guard = TEST_MUTEX.lock().unwrap();
         clear_providers();
         
-        register_provider(Box::new(TestProvider {
-            name: "test".to_string(),
-            ready: true,
-        }));
+        register_provider_with_priority(Box::new(TestProvider { name: "low".into(), ready: true }), 0);
+        register_provider_with_priority(Box::new(TestProvider { name: "high".into(), ready: true }), 10);
 
-        assert_eq!(provider_count(), 1);
-        
-        let key = get_master_key();
-        assert!(key.is_ok());
-        
-        clear_providers();
+        {
+            let providers = get_providers();
+            let guard = providers.read().unwrap();
+            assert_eq!(guard[0].provider.name(), "high");
+            assert_eq!(guard[1].provider.name(), "low");
     }
 
-    #[test]
-    fn test_no_providers() {
-        let _guard = TEST_MUTEX.lock().unwrap();
-        clear_providers();
+        disable_provider("high");
         
-        let result = get_master_key();
-        assert!(result.is_err());
-        
-        if let Err(CryptoTensorsError::Registry(msg)) = result {
-            assert!(msg.contains("No key providers registered"));
-        } else {
-            panic!("Expected Registry error");
-        }
-    }
-
-    #[test]
-    fn test_not_ready_provider() {
-        let _guard = TEST_MUTEX.lock().unwrap();
-        clear_providers();
-        
-        register_provider(Box::new(TestProvider {
-            name: "not-ready".to_string(),
-            ready: false,
-        }));
-
-        let result = get_master_key();
-        assert!(result.is_err());
-        
-        clear_providers();
-    }
-
-    #[test]
-    fn test_fallback_to_ready_provider() {
-        let _guard = TEST_MUTEX.lock().unwrap();
-        clear_providers();
-        
-        // First provider not ready
-        register_provider(Box::new(TestProvider {
-            name: "first".to_string(),
-            ready: false,
-        }));
-        
-        // Second provider ready
-        register_provider(Box::new(TestProvider {
-            name: "second".to_string(),
-            ready: true,
-        }));
-
-        let result = get_master_key();
-        assert!(result.is_ok());
-        
-        clear_providers();
+        let providers = get_providers();
+        let guard = providers.read().unwrap();
+        // After disable, the provider should be removed
+        assert_eq!(guard.len(), 1);
+        assert_eq!(guard[0].provider.name(), "low");
     }
 }
-

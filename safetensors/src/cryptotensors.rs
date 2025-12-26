@@ -661,7 +661,9 @@ impl<'data> CryptoTensors<'data> {
         new_metadata.insert("__crypto_keys__".to_string(), key_material_json);
 
         // Add encryption information
-        let crypto_json = serde_json::to_string(&self.cryptors)
+        // Use BTreeMap to ensure deterministic ordering of cryptors
+        let sorted_cryptors: std::collections::BTreeMap<_, _> = self.cryptors.iter().collect();
+        let crypto_json = serde_json::to_string(&sorted_cryptors)
             .map_err(|e| CryptoTensorsError::Encryption(e.to_string()))?;
         new_metadata.insert("__encryption__".to_string(), crypto_json);
 
@@ -673,8 +675,10 @@ impl<'data> CryptoTensors<'data> {
         // Add signature information
         let header = Metadata::new(Some(new_metadata.clone()), tensors)
             .map_err(|e| CryptoTensorsError::InvalidKey(format!("Failed to create metadata: {}", e)))?;
+        
+        // Use Metadata's Serialize implementation directly for signing to match verification
         let header_json = serde_json::to_string(&header)?;
-        self.signer.sign(&header_json.as_bytes())?;
+        self.signer.sign(header_json.as_bytes())?;
         let signature = self.signer.signature.get()
             .ok_or_else(|| CryptoTensorsError::Signing("Failed to get signature".to_string()))?;
         new_metadata.insert("__signature__".to_string(), BASE64.encode(signature));
@@ -736,17 +740,22 @@ impl<'data> CryptoTensors<'data> {
         signer.signature.set(signature)
             .expect("Failed to set signature");
         
-        // Build JSON for verification by cloning metadata and removing signature
-        // We can't directly modify Metadata's private fields, so we work with JSON
-        let mut header_for_verify: serde_json::Value = serde_json::to_value(&header)
-            .map_err(|e| CryptoTensorsError::Verification(e.to_string()))?;
-        if let Some(meta) = header_for_verify.get_mut("__metadata__") {
-            if let Some(obj) = meta.as_object_mut() {
-                obj.remove("__signature__");
-            }
+        // Build Metadata for verification by reconstructing it with the same tensor order
+        let mut metadata_map = header.metadata().clone().unwrap_or_default();
+        metadata_map.remove("__signature__");
+        
+        let mut tensors_vec = Vec::new();
+        for key in header.offset_keys() {
+            let info = header.info(&key).ok_or_else(|| CryptoTensorsError::Verification(format!("Tensor {} not found in header", key)))?.clone();
+            tensors_vec.push((key, info));
         }
+        
+        let header_for_verify = Metadata::new(Some(metadata_map), tensors_vec)
+             .map_err(|e| CryptoTensorsError::Verification(e.to_string()))?;
+             
         let header_for_verify_json = serde_json::to_string(&header_for_verify)
             .map_err(|e| CryptoTensorsError::Verification(e.to_string()))?;
+        
         if !signer.verify(header_for_verify_json.as_bytes())? {
             return Err(CryptoTensorsError::Verification("Signature verification failed".to_string()));
         }

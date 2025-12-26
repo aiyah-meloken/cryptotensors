@@ -2,18 +2,25 @@ import os
 import tempfile
 import unittest
 import numpy as np
-import paddle
-import cryptotensors
-from cryptotensors.paddle import load_file, save_file
-from cryptotensors import safe_open
-from crypto_utils import generate_test_keys, create_crypto_config
+
+try:
+    import paddle
+    import cryptotensors
+    from cryptotensors.paddle import load_file, save_file
+    from cryptotensors import safe_open
+    from crypto_utils import generate_test_keys, create_crypto_config
+
+    HAS_PADDLE = True
+except ImportError:
+    HAS_PADDLE = False
 
 
+@unittest.skipIf(not HAS_PADDLE, "Paddle is not available")
 class CryptoPaddleTestCase(unittest.TestCase):
     def setUp(self):
         self.data = {
-            "test": paddle.zeros((2, 2), dtype="float32"),
-            "test2": paddle.randn((10, 10), dtype="float32"),
+            "test": paddle.zeros((2, 2), dtype=paddle.float32),
+            "test2": paddle.randn((10, 10), dtype=paddle.float32),
         }
         self.keys = generate_test_keys(algorithm="aes256gcm")
         self.config = create_crypto_config(**self.keys)
@@ -34,7 +41,7 @@ class CryptoPaddleTestCase(unittest.TestCase):
 
         for k, v in self.data.items():
             tv = reloaded[k]
-            self.assertTrue(np.allclose(v.numpy(), tv.numpy()))
+            self.assertTrue(np.allclose(v, tv))
 
     def test_roundtrip_algorithms(self):
         algos = ["aes128gcm", "aes256gcm", "chacha20poly1305"]
@@ -55,7 +62,7 @@ class CryptoPaddleTestCase(unittest.TestCase):
                         os.unlink(f.name)
 
                     for k, v in self.data.items():
-                        self.assertTrue(np.allclose(v.numpy(), reloaded[k].numpy()))
+                        self.assertTrue(np.allclose(v, reloaded[k]))
                 finally:
                     cryptotensors.disable_provider("temp")
 
@@ -76,13 +83,17 @@ class CryptoPaddleTestCase(unittest.TestCase):
             os.unlink(f.name)
 
         for k, v in self.data.items():
-            self.assertTrue(np.allclose(v.numpy(), reloaded[k].numpy()))
+            self.assertTrue(np.allclose(v, reloaded[k]))
 
     def test_bfloat16_encrypted(self):
-        data = {"bf16": paddle.cast(paddle.randn((2, 2)), "bfloat16")}
+        if paddle.__version__ >= "3.2.0":
+            dtype = paddle.bfloat16
+        else:
+            dtype = paddle.float32
+        data = {"bf16": paddle.cast(paddle.randn((2, 2)), dtype)}
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
             save_file(data, f.name, config=self.config)
             reloaded = load_file(f.name)
             os.unlink(f.name)
 
-        self.assertTrue(np.allclose(data["bf16"].numpy(), reloaded["bf16"].numpy()))
+        self.assertTrue(np.allclose(data["bf16"], reloaded["bf16"]))

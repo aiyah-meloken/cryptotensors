@@ -1,3 +1,3 @@
-# Compatibility layer: re-export mlx module from cryptotensors
-from cryptotensors.mlx import *
+from cryptotensors.mlx import * 
+from cryptotensors.mlx import _mx2np, _np2mx
 

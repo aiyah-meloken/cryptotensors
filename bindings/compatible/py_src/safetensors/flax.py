@@ -1,3 +1,3 @@
-# Compatibility layer: re-export flax module from cryptotensors
-from cryptotensors.flax import *
+from cryptotensors.flax import * 
+from cryptotensors.flax import _jnp2np, _np2jnp
 

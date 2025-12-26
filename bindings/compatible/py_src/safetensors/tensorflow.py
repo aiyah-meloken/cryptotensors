@@ -1,3 +1,3 @@
-# Compatibility layer: re-export tensorflow module from cryptotensors
-from cryptotensors.tensorflow import *
+from cryptotensors.tensorflow import * 
+from cryptotensors.tensorflow import _np2tf, _tf2np
 

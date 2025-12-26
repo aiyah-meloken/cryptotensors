@@ -1,3 +1,3 @@
-# Compatibility layer: re-export paddle module from cryptotensors
-from cryptotensors.paddle import *
+from cryptotensors.paddle import * 
+from cryptotensors.paddle import _np2paddle, _paddle2np
 

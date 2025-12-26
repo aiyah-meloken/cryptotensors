@@ -34,7 +34,7 @@ class CryptoFlaxTestCase(unittest.TestCase):
 
         for k, v in self.data.items():
             tv = reloaded[k]
-            self.assertTrue(np.allclose(np.array(v), np.array(tv)))
+            self.assertTrue(jnp.allclose(v, tv))
 
     def test_roundtrip_algorithms(self):
         algos = ["aes128gcm", "aes256gcm", "chacha20poly1305"]
@@ -55,7 +55,7 @@ class CryptoFlaxTestCase(unittest.TestCase):
                         os.unlink(f.name)
 
                     for k, v in self.data.items():
-                        self.assertTrue(np.allclose(np.array(v), np.array(reloaded[k])))
+                        self.assertTrue(jnp.allclose(v, reloaded[k]))
                 finally:
                     cryptotensors.disable_provider("temp")
 
@@ -76,7 +76,7 @@ class CryptoFlaxTestCase(unittest.TestCase):
             os.unlink(f.name)
 
         for k, v in self.data.items():
-            self.assertTrue(np.allclose(np.array(v), np.array(reloaded[k])))
+            self.assertTrue(jnp.allclose(v, reloaded[k]))
 
     def test_bfloat16_encrypted(self):
         data = {"bf16": jnp.array(np.random.normal(size=(2, 2)), dtype=jnp.bfloat16)}
@@ -85,4 +85,4 @@ class CryptoFlaxTestCase(unittest.TestCase):
             reloaded = load_file(f.name)
             os.unlink(f.name)
 
-        self.assertTrue(np.allclose(np.array(data["bf16"]), np.array(reloaded["bf16"])))
+        self.assertTrue(jnp.allclose(data["bf16"], reloaded["bf16"]))

@@ -100,11 +100,4 @@ class CryptoTfTestCase(unittest.TestCase):
             reloaded = load_file(f.name)
             os.unlink(f.name)
 
-        # Handle both TensorFlow tensors and numpy arrays
-        v_np = data["bf16"].numpy() if hasattr(data["bf16"], "numpy") else data["bf16"]
-        tv_np = (
-            reloaded["bf16"].numpy()
-            if hasattr(reloaded["bf16"], "numpy")
-            else reloaded["bf16"]
-        )
-        self.assertTrue(np.allclose(v_np, tv_np))
+        self.assertTrue(tf.experimental.numpy.allclose(data["bf16"], reloaded["bf16"]))

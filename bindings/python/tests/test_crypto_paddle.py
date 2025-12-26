@@ -96,4 +96,4 @@ class CryptoPaddleTestCase(unittest.TestCase):
             reloaded = load_file(f.name)
             os.unlink(f.name)
 
-        self.assertTrue(np.allclose(data["bf16"], reloaded["bf16"]))
+        self.assertTrue(paddle.allclose(data["bf16"], reloaded["bf16"]).item())

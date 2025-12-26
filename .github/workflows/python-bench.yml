@@ -43,6 +43,10 @@ jobs:
         run: |
           cargo test
           uv run pytest --benchmark-json output.json benches/
+      # Discard any changes to lock files before switching branches
+      - name: Discard lock file changes
+        run: |
+          git restore bindings/python/uv.lock || git checkout -- bindings/python/uv.lock || true
       # Download previous benchmark result from cache (if exists)
       - name: Download previous benchmark data
         uses: actions/cache@v4

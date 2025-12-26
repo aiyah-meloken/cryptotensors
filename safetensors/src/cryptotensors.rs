@@ -205,7 +205,8 @@ mod cryptor_serde {
         let value: Option<String> = Option::deserialize(deserializer)?;
         let cell = OnceCell::new();
         if let Some(v) = value {
-            cell.set(v).map_err(|_| D::Error::custom("Failed to set OnceCell value"))?;
+            cell.set(v)
+                .map_err(|_| D::Error::custom("Failed to set OnceCell value"))?;
         }
         Ok(cell)
     }
@@ -296,7 +297,7 @@ impl<'data> SingleCryptor<'data> {
         let alg = EncryptionAlgorithm::from_str(&key_material.alg)
             .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(key_material.alg.clone()))?;
         let master_key = key_material.get_master_key_bytes()?;
-        
+
         Ok(Self {
             enc_algo: alg.to_string(),
             wrapped_key: OnceCell::new(),
@@ -348,13 +349,15 @@ impl<'data> SingleCryptor<'data> {
     /// * `Encryption` - If key encryption fails
     fn wrap_key(&self, key: &[u8]) -> Result<(), CryptoTensorsError> {
         let mut key_buf = key.to_vec();
-        let (key_iv, key_tag) =
-            encrypt_data(&mut key_buf, &self.master_key, &self.enc_algo)?;
-        self.wrapped_key.set(BASE64.encode(&key_buf))
+        let (key_iv, key_tag) = encrypt_data(&mut key_buf, &self.master_key, &self.enc_algo)?;
+        self.wrapped_key
+            .set(BASE64.encode(&key_buf))
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set wrapped key".to_string()))?;
-        self.key_iv.set(BASE64.encode(&key_iv))
+        self.key_iv
+            .set(BASE64.encode(&key_iv))
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set key iv".to_string()))?;
-        self.key_tag.set(BASE64.encode(&key_tag))
+        self.key_tag
+            .set(BASE64.encode(&key_tag))
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set key tag".to_string()))?;
         Ok(())
     }
@@ -376,16 +379,32 @@ impl<'data> SingleCryptor<'data> {
             return Err(CryptoTensorsError::MissingMasterKey);
         }
 
-        let mut data_key = BASE64.decode(&self.wrapped_key.get().ok_or_else(|| CryptoTensorsError::KeyUnwrap("wrapped_key is empty".to_string()))?)
-            .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
+        let mut data_key =
+            BASE64
+                .decode(&self.wrapped_key.get().ok_or_else(|| {
+                    CryptoTensorsError::KeyUnwrap("wrapped_key is empty".to_string())
+                })?)
+                .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
         decrypt_data(
             &mut data_key,
             &self.master_key,
             &self.enc_algo,
-            BASE64.decode(&self.key_iv.get().ok_or_else(|| CryptoTensorsError::KeyUnwrap("key_iv is empty".to_string()))?)
-                .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?.as_slice(),
-            BASE64.decode(&self.key_tag.get().ok_or_else(|| CryptoTensorsError::KeyUnwrap("key_tag is empty".to_string()))?)
-                .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?.as_slice(),
+            BASE64
+                .decode(
+                    &self.key_iv.get().ok_or_else(|| {
+                        CryptoTensorsError::KeyUnwrap("key_iv is empty".to_string())
+                    })?,
+                )
+                .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
+                .as_slice(),
+            BASE64
+                .decode(
+                    &self.key_tag.get().ok_or_else(|| {
+                        CryptoTensorsError::KeyUnwrap("key_tag is empty".to_string())
+                    })?,
+                )
+                .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
+                .as_slice(),
         )?;
         Ok(data_key)
     }
@@ -415,10 +434,18 @@ impl<'data> SingleCryptor<'data> {
                     &mut buffer,
                     data_key.as_slice(),
                     &self.enc_algo,
-                    BASE64.decode(&self.iv.get().ok_or_else(|| CryptoTensorsError::KeyUnwrap("iv is empty".to_string()))?)
-                        .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?.as_slice(),
-                    BASE64.decode(&self.tag.get().ok_or_else(|| CryptoTensorsError::KeyUnwrap("tag is empty".to_string()))?)
-                        .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?.as_slice(),
+                    BASE64
+                        .decode(&self.iv.get().ok_or_else(|| {
+                            CryptoTensorsError::KeyUnwrap("iv is empty".to_string())
+                        })?)
+                        .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
+                        .as_slice(),
+                    BASE64
+                        .decode(&self.tag.get().ok_or_else(|| {
+                            CryptoTensorsError::KeyUnwrap("tag is empty".to_string())
+                        })?)
+                        .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
+                        .as_slice(),
                 )?;
 
                 Ok(buffer)
@@ -448,12 +475,15 @@ impl<'data> SingleCryptor<'data> {
         // Copy data to buffer, prepare in-place encryption
         let mut buffer = data.to_vec();
         let (iv, tag) = encrypt_data(&mut buffer, &data_key, &self.enc_algo)?;
-        self.iv.set(BASE64.encode(&iv))
+        self.iv
+            .set(BASE64.encode(&iv))
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set iv".to_string()))?;
-        self.tag.set(BASE64.encode(&tag))
+        self.tag
+            .set(BASE64.encode(&tag))
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set tag".to_string()))?;
         self.wrap_key(&data_key)?;
-        self.buffer.set(buffer)
+        self.buffer
+            .set(buffer)
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set buffer".to_string()))?;
         Ok(())
     }
@@ -487,16 +517,26 @@ impl HeaderSigner {
         let alg = SignatureAlgorithm::from_str(&key_material.alg)
             .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(key_material.alg.clone()))?;
 
-        let priv_key = key_material.d_priv.get()
+        let priv_key = key_material
+            .d_priv
+            .get()
             .and_then(|k| k.as_ref())
-            .map(|k| BASE64.decode(k)
-                .map_err(|e| CryptoTensorsError::InvalidKey(format!("Invalid base64 private key: {}", e))))
+            .map(|k| {
+                BASE64.decode(k).map_err(|e| {
+                    CryptoTensorsError::InvalidKey(format!("Invalid base64 private key: {}", e))
+                })
+            })
             .transpose()?;
 
-        let pub_key = key_material.x_pub.get()
+        let pub_key = key_material
+            .x_pub
+            .get()
             .and_then(|k| k.as_ref())
-            .map(|k| BASE64.decode(k)
-                .map_err(|e| CryptoTensorsError::InvalidKey(format!("Invalid base64 public key: {}", e))))
+            .map(|k| {
+                BASE64.decode(k).map_err(|e| {
+                    CryptoTensorsError::InvalidKey(format!("Invalid base64 public key: {}", e))
+                })
+            })
             .transpose()?;
 
         Ok(Self {
@@ -512,9 +552,9 @@ impl HeaderSigner {
         match &self.priv_key {
             Some(key) => {
                 let signature = sign_data(data, key, &self.alg)?;
-                self.signature
-                    .set(signature)
-                    .map_err(|_| CryptoTensorsError::Signing("Signature already set".to_string()))?;
+                self.signature.set(signature).map_err(|_| {
+                    CryptoTensorsError::Signing("Signature already set".to_string())
+                })?;
                 Ok(())
             }
             None => Err(CryptoTensorsError::MissingSigningKey),
@@ -524,17 +564,16 @@ impl HeaderSigner {
     /// Verify the header signature
     fn verify(&self, data: &[u8]) -> Result<bool, CryptoTensorsError> {
         match &self.pub_key {
-            Some(key) => {
-                match self.signature.get() {
-                    Some(signature) => verify_signature(data, signature, key, &self.alg),
-                    None => Err(CryptoTensorsError::MissingSignature("No signature to verify".to_string())),
-                }
-            }
+            Some(key) => match self.signature.get() {
+                Some(signature) => verify_signature(data, signature, key, &self.alg),
+                None => Err(CryptoTensorsError::MissingSignature(
+                    "No signature to verify".to_string(),
+                )),
+            },
             None => Err(CryptoTensorsError::MissingVerificationKey),
         }
     }
 }
-
 
 /// Manager for handling encryption and decryption of multiple tensors
 #[derive(Debug)]
@@ -577,7 +616,9 @@ impl<'data> CryptoTensors<'data> {
     ) -> Result<Option<Self>, CryptoTensorsError> {
         // Check version
         if config.version != "1" {
-            return Err(CryptoTensorsError::UnsupportedVersion(config.version.clone()));
+            return Err(CryptoTensorsError::UnsupportedVersion(
+                config.version.clone(),
+            ));
         }
         config.enc_key.validate(ValidateMode::ForCreation)?;
         config.sign_key.validate(ValidateMode::ForCreation)?;
@@ -673,14 +714,17 @@ impl<'data> CryptoTensors<'data> {
         new_metadata.insert("__policy__".to_string(), policy_json);
 
         // Add signature information
-        let header = Metadata::new(Some(new_metadata.clone()), tensors)
-            .map_err(|e| CryptoTensorsError::InvalidKey(format!("Failed to create metadata: {}", e)))?;
-        
+        let header = Metadata::new(Some(new_metadata.clone()), tensors).map_err(|e| {
+            CryptoTensorsError::InvalidKey(format!("Failed to create metadata: {}", e))
+        })?;
+
         // Use Metadata's Serialize implementation directly for signing to match verification
         let header_json = serde_json::to_string(&header)?;
         self.signer.sign(header_json.as_bytes())?;
-        let signature = self.signer.signature.get()
-            .ok_or_else(|| CryptoTensorsError::Signing("Failed to get signature".to_string()))?;
+        let signature =
+            self.signer.signature.get().ok_or_else(|| {
+                CryptoTensorsError::Signing("Failed to get signature".to_string())
+            })?;
         new_metadata.insert("__signature__".to_string(), BASE64.encode(signature));
 
         Ok(Some(new_metadata))
@@ -708,19 +752,23 @@ impl<'data> CryptoTensors<'data> {
         };
 
         // Verify required fields exist
-        let key_materials = metadata
-            .get("__crypto_keys__")
-            .ok_or_else(|| CryptoTensorsError::InvalidKey("Missing __crypto_keys__ in metadata".to_string()))?;
-        let signature_hex = metadata
-            .get("__signature__")
-            .ok_or_else(|| CryptoTensorsError::MissingSignature("Missing __signature__ in metadata".to_string()))?;
-        let policy_str = metadata.get("__policy__")
-            .ok_or_else(|| CryptoTensorsError::Policy("Missing __policy__ in metadata".to_string()))?;
+        let key_materials = metadata.get("__crypto_keys__").ok_or_else(|| {
+            CryptoTensorsError::InvalidKey("Missing __crypto_keys__ in metadata".to_string())
+        })?;
+        let signature_hex = metadata.get("__signature__").ok_or_else(|| {
+            CryptoTensorsError::MissingSignature("Missing __signature__ in metadata".to_string())
+        })?;
+        let policy_str = metadata.get("__policy__").ok_or_else(|| {
+            CryptoTensorsError::Policy("Missing __policy__ in metadata".to_string())
+        })?;
 
         // Parse key materials
-        let key_materials: serde_json::Value = serde_json::from_str(key_materials)
-            .map_err(|e| CryptoTensorsError::InvalidKey(format!("Failed to parse key materials: {}", e)))?;
-        let version = key_materials.get("version")
+        let key_materials: serde_json::Value =
+            serde_json::from_str(key_materials).map_err(|e| {
+                CryptoTensorsError::InvalidKey(format!("Failed to parse key materials: {}", e))
+            })?;
+        let version = key_materials
+            .get("version")
             .and_then(|v| v.as_str())
             .ok_or(CryptoTensorsError::MissingVersion)?;
         if version != "1" {
@@ -729,50 +777,62 @@ impl<'data> CryptoTensors<'data> {
         let enc_key = KeyMaterial::from_header(&key_materials["enc"])?;
         let sign_key = KeyMaterial::from_header(&key_materials["sign"])?;
 
-
         // Load keys
         sign_key.load_key()?;
 
         // Create signer and verify signature
         let signer = HeaderSigner::new(&sign_key)?;
-        let signature = BASE64.decode(signature_hex)
+        let signature = BASE64
+            .decode(signature_hex)
             .map_err(|_| CryptoTensorsError::InvalidSignatureFormat)?;
-        signer.signature.set(signature)
+        signer
+            .signature
+            .set(signature)
             .expect("Failed to set signature");
-        
+
         // Build Metadata for verification by reconstructing it with the same tensor order
         let mut metadata_map = header.metadata().clone().unwrap_or_default();
         metadata_map.remove("__signature__");
-        
+
         let mut tensors_vec = Vec::new();
         for key in header.offset_keys() {
-            let info = header.info(&key).ok_or_else(|| CryptoTensorsError::Verification(format!("Tensor {} not found in header", key)))?.clone();
+            let info = header
+                .info(&key)
+                .ok_or_else(|| {
+                    CryptoTensorsError::Verification(format!("Tensor {} not found in header", key))
+                })?
+                .clone();
             tensors_vec.push((key, info));
         }
-        
+
         let header_for_verify = Metadata::new(Some(metadata_map), tensors_vec)
-             .map_err(|e| CryptoTensorsError::Verification(e.to_string()))?;
-             
+            .map_err(|e| CryptoTensorsError::Verification(e.to_string()))?;
+
         let header_for_verify_json = serde_json::to_string(&header_for_verify)
             .map_err(|e| CryptoTensorsError::Verification(e.to_string()))?;
-        
+
         if !signer.verify(header_for_verify_json.as_bytes())? {
-            return Err(CryptoTensorsError::Verification("Signature verification failed".to_string()));
+            return Err(CryptoTensorsError::Verification(
+                "Signature verification failed".to_string(),
+            ));
         }
 
         // Verify policy
         let policy: AccessPolicy = serde_json::from_str(policy_str)
             .map_err(|e| CryptoTensorsError::Policy(format!("Failed to parse policy: {}", e)))?;
         if !policy.evaluate(String::new())? {
-            return Err(CryptoTensorsError::Policy("Policy evaluation denied".to_string()));
+            return Err(CryptoTensorsError::Policy(
+                "Policy evaluation denied".to_string(),
+            ));
         }
 
         // Initialize cryptors after verification
         enc_key.load_key()?;
         let master_key: Arc<[u8]> = Arc::from(enc_key.get_master_key_bytes()?);
 
-        let mut cryptors: HashMap<String, SingleCryptor<'data>> = serde_json::from_str(encryption_info)
-        .map_err(|e| CryptoTensorsError::Encryption(e.to_string()))?;
+        let mut cryptors: HashMap<String, SingleCryptor<'data>> =
+            serde_json::from_str(encryption_info)
+                .map_err(|e| CryptoTensorsError::Encryption(e.to_string()))?;
         for cryptor in cryptors.values_mut() {
             cryptor.master_key = master_key.clone();
             cryptor.enc_algo = enc_key.alg.clone();
@@ -831,11 +891,7 @@ impl<'data> CryptoTensors<'data> {
     /// * `RandomGeneration` - If key generation fails
     /// * `Encryption` - If data encryption fails
     /// * `KeyCreation` - If key creation fails
-    pub fn silent_encrypt(
-        &self,
-        tensor_name: &str,
-        data: &[u8],
-    ) -> Result<(), CryptoTensorsError> {
+    pub fn silent_encrypt(&self, tensor_name: &str, data: &[u8]) -> Result<(), CryptoTensorsError> {
         match self.get(tensor_name) {
             Some(cryptor) => cryptor.encrypt(data),
             None => Ok(()),
@@ -859,4 +915,3 @@ impl<'data> CryptoTensors<'data> {
         }
     }
 }
-

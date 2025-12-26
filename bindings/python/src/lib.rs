@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 // MODIFIED: CryptoTensors imports for encryption/decryption support
-use safetensors::cryptotensors::{SerializeCryptoConfig, CryptoTensors};
+use safetensors::cryptotensors::{CryptoTensors, SerializeCryptoConfig};
 use safetensors::key::KeyMaterial;
 use safetensors::policy::AccessPolicy;
 use safetensors::registry::{self, TempKeyProvider, PRIORITY_TEMP};
@@ -46,7 +46,7 @@ fn _register_key_provider_internal(keys: Vec<PyBound<PyAny>>) -> PyResult<()> {
     for key in keys {
         json_keys.push(pyany_to_json(&key)?);
     }
-    
+
     let provider = TempKeyProvider::new(json_keys);
     registry::register_provider_with_priority(Box::new(provider), PRIORITY_TEMP);
     Ok(())
@@ -81,7 +81,10 @@ fn pyany_to_json(obj: &PyBound<PyAny>) -> PyResult<serde_json::Value> {
     } else if obj.is_none() {
         Ok(serde_json::Value::Null)
     } else {
-        Err(PyException::new_err(format!("Unsupported type for JSON conversion: {}", obj)))
+        Err(PyException::new_err(format!(
+            "Unsupported type for JSON conversion: {}",
+            obj
+        )))
     }
 }
 
@@ -255,7 +258,9 @@ fn serialize_file(
 
 /// MODIFIED: Parse Python dict to SerializeCryptoConfig for encryption.
 fn prepare_crypto(config: Option<PyBound<PyAny>>) -> PyResult<Option<SerializeCryptoConfig>> {
-    let Some(config) = config else { return Ok(None); };
+    let Some(config) = config else {
+        return Ok(None);
+    };
     if config.is_instance_of::<pyo3::types::PyNone>() {
         return Ok(None);
     }
@@ -268,13 +273,15 @@ fn prepare_crypto(config: Option<PyBound<PyAny>>) -> PyResult<Option<SerializeCr
     };
 
     // enc_key: dict
-    let enc_key_any = config_dict.get_item("enc_key")?
+    let enc_key_any = config_dict
+        .get_item("enc_key")?
         .ok_or_else(|| SafetensorError::new_err("Missing 'enc_key' in config"))?;
     let enc_key_dict = enc_key_any.downcast::<PyDict>()?;
     let enc_key = pykeymaterial_from_dict("enc", enc_key_dict)?;
 
     // sign_key: dict
-    let sign_key_any = config_dict.get_item("sign_key")?
+    let sign_key_any = config_dict
+        .get_item("sign_key")?
         .ok_or_else(|| SafetensorError::new_err("Missing 'sign_key' in config"))?;
     let sign_key_dict = sign_key_any.downcast::<PyDict>()?;
     let sign_key = pykeymaterial_from_dict("sign", sign_key_dict)?;
@@ -292,12 +299,14 @@ fn prepare_crypto(config: Option<PyBound<PyAny>>) -> PyResult<Option<SerializeCr
                 None => None,
             };
             AccessPolicy::new(local, remote)
-        },
+        }
         None => AccessPolicy::new(None, None),
     };
 
     let config = SerializeCryptoConfig::new("1".to_string(), tensors, enc_key, sign_key, policy)
-        .map_err(|e| SafetensorError::new_err(format!("Failed to build SerializeCryptoConfig: {e}")))?;
+        .map_err(|e| {
+            SafetensorError::new_err(format!("Failed to build SerializeCryptoConfig: {e}"))
+        })?;
     Ok(Some(config))
 }
 
@@ -343,8 +352,9 @@ fn pykeymaterial_from_dict(key_type: &str, dict: &PyBound<PyDict>) -> PyResult<K
     match key_type {
         "enc" => KeyMaterial::new_enc_key(k, alg, kid, jku)
             .map_err(|e| SafetensorError::new_err(format!("Failed to build Enc KeyMaterial: {e}"))),
-        "sign" => KeyMaterial::new_sign_key(x_pub, d_priv, alg, kid, jku)
-            .map_err(|e| SafetensorError::new_err(format!("Failed to build Sign KeyMaterial: {e}"))),
+        "sign" => KeyMaterial::new_sign_key(x_pub, d_priv, alg, kid, jku).map_err(|e| {
+            SafetensorError::new_err(format!("Failed to build Sign KeyMaterial: {e}"))
+        }),
         _ => Err(SafetensorError::new_err("key_type must be 'enc' or 'sign'")),
     }
 }
@@ -686,105 +696,111 @@ impl Open {
         })?;
 
         let (storage, raw_mmap) = match &framework {
-            Framework::Paddle => Python::with_gil(|py| -> PyResult<(Storage, Option<Arc<Storage>>)> {
-                let paddle = get_module(py, &PADDLE_MODULE)?;
-                let version: String = paddle.getattr(intern!(py, "__version__"))?.extract()?;
-                let version = Version::from_string(&version).map_err(SafetensorError::new_err)?;
+            Framework::Paddle => {
+                Python::with_gil(|py| -> PyResult<(Storage, Option<Arc<Storage>>)> {
+                    let paddle = get_module(py, &PADDLE_MODULE)?;
+                    let version: String = paddle.getattr(intern!(py, "__version__"))?.extract()?;
+                    let version =
+                        Version::from_string(&version).map_err(SafetensorError::new_err)?;
 
-                // todo: version check, only paddle 3.1.1 or develop
-                if version >= Version::new(3, 1, 1) || version == Version::new(0, 0, 0) {
-                    let py_filename: PyObject = filename
-                        .to_str()
-                        .ok_or_else(|| {
-                            SafetensorError::new_err(format!(
-                                "Path {} is not valid UTF-8",
-                                filename.display()
-                            ))
-                        })?
-                        .into_pyobject(py)?
-                        .into();
-                    let size: PyObject = buffer.len().into_pyobject(py)?.into();
-                    let init_kargs = [
-                        (intern!(py, "filename"), py_filename),
-                        (intern!(py, "nbytes"), size),
-                    ]
-                    .into_py_dict(py)?;
-                    let storage = paddle
-                        .getattr(intern!(py, "MmapStorage"))?
-                        .call((), Some(&init_kargs))?
-                        .into_pyobject(py)?
-                        .into();
-                    let gil_storage = OnceLock::new();
-                    gil_storage.get_or_init_py_attached(py, || storage);
-                    
-                    // MODIFIED: Keep raw mmap for crypto operations
-                    let raw_mmap = match crypto {
-                        Some(_) => Some(Arc::new(Storage::Mmap(buffer))),
-                        None => None,
-                    };
-                    
-                    Ok((Storage::PaddleStorage(gil_storage), raw_mmap))
-                } else {
-                    let module = PyModule::import(py, intern!(py, "numpy"))?;
-                    NUMPY_MODULE.get_or_init_py_attached(py, || module.into());
-                    Ok((Storage::Mmap(buffer), None))
-                }
-            })?,
-            Framework::Pytorch => Python::with_gil(|py| -> PyResult<(Storage, Option<Arc<Storage>>)> {
-                let module = get_module(py, &TORCH_MODULE)?;
+                    // todo: version check, only paddle 3.1.1 or develop
+                    if version >= Version::new(3, 1, 1) || version == Version::new(0, 0, 0) {
+                        let py_filename: PyObject = filename
+                            .to_str()
+                            .ok_or_else(|| {
+                                SafetensorError::new_err(format!(
+                                    "Path {} is not valid UTF-8",
+                                    filename.display()
+                                ))
+                            })?
+                            .into_pyobject(py)?
+                            .into();
+                        let size: PyObject = buffer.len().into_pyobject(py)?.into();
+                        let init_kargs = [
+                            (intern!(py, "filename"), py_filename),
+                            (intern!(py, "nbytes"), size),
+                        ]
+                        .into_py_dict(py)?;
+                        let storage = paddle
+                            .getattr(intern!(py, "MmapStorage"))?
+                            .call((), Some(&init_kargs))?
+                            .into_pyobject(py)?
+                            .into();
+                        let gil_storage = OnceLock::new();
+                        gil_storage.get_or_init_py_attached(py, || storage);
 
-                let version: String = module.getattr(intern!(py, "__version__"))?.extract()?;
-                let version = Version::from_string(&version).map_err(SafetensorError::new_err)?;
+                        // MODIFIED: Keep raw mmap for crypto operations
+                        let raw_mmap = match crypto {
+                            Some(_) => Some(Arc::new(Storage::Mmap(buffer))),
+                            None => None,
+                        };
 
-                // Untyped storage only exists for versions over 1.11.0
-                // Same for torch.asarray which is necessary for zero-copy tensor
-                if version >= Version::new(1, 11, 0) {
-                    // storage = torch.ByteStorage.from_file(filename, shared=False, size=size).untyped()
-                    let py_filename: PyObject = filename
-                        .to_str()
-                        .ok_or_else(|| {
-                            SafetensorError::new_err(format!(
-                                "Path {} is not valid UTF-8",
-                                filename.display()
-                            ))
-                        })?
-                        .into_pyobject(py)?
-                        .into();
-                    let size: PyObject = buffer.len().into_pyobject(py)?.into();
-                    let shared: PyObject = PyBool::new(py, false).to_owned().into();
-                    let (size_name, storage_name) = if version >= Version::new(2, 0, 0) {
-                        (intern!(py, "nbytes"), intern!(py, "UntypedStorage"))
+                        Ok((Storage::PaddleStorage(gil_storage), raw_mmap))
                     } else {
-                        (intern!(py, "size"), intern!(py, "ByteStorage"))
-                    };
+                        let module = PyModule::import(py, intern!(py, "numpy"))?;
+                        NUMPY_MODULE.get_or_init_py_attached(py, || module.into());
+                        Ok((Storage::Mmap(buffer), None))
+                    }
+                })?
+            }
+            Framework::Pytorch => {
+                Python::with_gil(|py| -> PyResult<(Storage, Option<Arc<Storage>>)> {
+                    let module = get_module(py, &TORCH_MODULE)?;
 
-                    let kwargs =
-                        [(intern!(py, "shared"), shared), (size_name, size)].into_py_dict(py)?;
-                    let storage = module
-                        .getattr(storage_name)?
-                        // .getattr(intern!(py, "from_file"))?
-                        .call_method("from_file", (py_filename,), Some(&kwargs))?;
+                    let version: String = module.getattr(intern!(py, "__version__"))?.extract()?;
+                    let version =
+                        Version::from_string(&version).map_err(SafetensorError::new_err)?;
 
-                    let untyped: PyBound<'_, PyAny> = match storage.getattr(intern!(py, "untyped"))
-                    {
-                        Ok(untyped) => untyped,
-                        Err(_) => storage.getattr(intern!(py, "_untyped"))?,
-                    };
-                    let storage = untyped.call0()?.into_pyobject(py)?.into();
-                    let gil_storage = OnceLock::new();
-                    gil_storage.get_or_init_py_attached(py, || storage);
+                    // Untyped storage only exists for versions over 1.11.0
+                    // Same for torch.asarray which is necessary for zero-copy tensor
+                    if version >= Version::new(1, 11, 0) {
+                        // storage = torch.ByteStorage.from_file(filename, shared=False, size=size).untyped()
+                        let py_filename: PyObject = filename
+                            .to_str()
+                            .ok_or_else(|| {
+                                SafetensorError::new_err(format!(
+                                    "Path {} is not valid UTF-8",
+                                    filename.display()
+                                ))
+                            })?
+                            .into_pyobject(py)?
+                            .into();
+                        let size: PyObject = buffer.len().into_pyobject(py)?.into();
+                        let shared: PyObject = PyBool::new(py, false).to_owned().into();
+                        let (size_name, storage_name) = if version >= Version::new(2, 0, 0) {
+                            (intern!(py, "nbytes"), intern!(py, "UntypedStorage"))
+                        } else {
+                            (intern!(py, "size"), intern!(py, "ByteStorage"))
+                        };
 
-                    // MODIFIED: Keep raw mmap for crypto operations
-                    let raw_mmap = match crypto {
-                        Some(_) => Some(Arc::new(Storage::Mmap(buffer))),
-                        None => None,
-                    };
+                        let kwargs = [(intern!(py, "shared"), shared), (size_name, size)]
+                            .into_py_dict(py)?;
+                        let storage = module
+                            .getattr(storage_name)?
+                            // .getattr(intern!(py, "from_file"))?
+                            .call_method("from_file", (py_filename,), Some(&kwargs))?;
 
-                    Ok((Storage::TorchStorage(gil_storage), raw_mmap))
-                } else {
-                    Ok((Storage::Mmap(buffer), None))
-                }
-            })?,
+                        let untyped: PyBound<'_, PyAny> =
+                            match storage.getattr(intern!(py, "untyped")) {
+                                Ok(untyped) => untyped,
+                                Err(_) => storage.getattr(intern!(py, "_untyped"))?,
+                            };
+                        let storage = untyped.call0()?.into_pyobject(py)?.into();
+                        let gil_storage = OnceLock::new();
+                        gil_storage.get_or_init_py_attached(py, || storage);
+
+                        // MODIFIED: Keep raw mmap for crypto operations
+                        let raw_mmap = match crypto {
+                            Some(_) => Some(Arc::new(Storage::Mmap(buffer))),
+                            None => None,
+                        };
+
+                        Ok((Storage::TorchStorage(gil_storage), raw_mmap))
+                    } else {
+                        Ok((Storage::Mmap(buffer), None))
+                    }
+                })?
+            }
             _ => (Storage::Mmap(buffer), None),
         };
 
@@ -865,8 +881,9 @@ impl Open {
 
                 // MODIFIED: Decrypt if crypto is present
                 let data = if let Some(crypto) = &self.crypto {
-                    crypto.silent_decrypt(name, data)
-                        .map_err(|e| SafetensorError::new_err(format!("Decryption failed: {e:?}")))?
+                    crypto.silent_decrypt(name, data).map_err(|e| {
+                        SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                    })?
                 } else {
                     data
                 };
@@ -933,15 +950,17 @@ impl Open {
                         } else {
                             let data = if let Some(raw_mmap) = &self.raw_mmap {
                                 if let Storage::Mmap(mmap) = raw_mmap.as_ref() {
-                                    &mmap[info.data_offsets.0 + self.offset..info.data_offsets.1 + self.offset]
+                                    &mmap[info.data_offsets.0 + self.offset
+                                        ..info.data_offsets.1 + self.offset]
                                 } else {
                                     return Err(SafetensorError::new_err("raw_mmap is not Mmap"));
                                 }
                             } else {
                                 return Err(SafetensorError::new_err("raw_mmap is None"));
                             };
-                            let decrypted = crypto.silent_decrypt(name, data)
-                                .map_err(|e| SafetensorError::new_err(format!("Decryption failed: {e:?}")))?;
+                            let decrypted = crypto.silent_decrypt(name, data).map_err(|e| {
+                                SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                            })?;
                             PyByteArray::new(py, &decrypted).into_any().into()
                         };
                         // Encrypted path: use paddle.to_tensor() for decrypted bytes
@@ -1037,27 +1056,32 @@ impl Open {
                         .call1((slice,))?;
 
                     // MODIFIED: Handle encrypted tensors using raw_mmap
-                    let array: PyObject = if self.crypto.as_ref().and_then(|c| c.get(name)).is_some() {
-                        let crypto = self.crypto.as_ref().unwrap();
-                        if let Some(decrypted) = crypto.get_buffer(name) {
-                            PyByteArray::new(py, decrypted).into_any().into()
-                        } else {
-                            let data = if let Some(raw_mmap) = &self.raw_mmap {
-                                if let Storage::Mmap(mmap) = raw_mmap.as_ref() {
-                                    &mmap[info.data_offsets.0 + self.offset..info.data_offsets.1 + self.offset]
-                                } else {
-                                    return Err(SafetensorError::new_err("raw_mmap is not Mmap"));
-                                }
+                    let array: PyObject =
+                        if self.crypto.as_ref().and_then(|c| c.get(name)).is_some() {
+                            let crypto = self.crypto.as_ref().unwrap();
+                            if let Some(decrypted) = crypto.get_buffer(name) {
+                                PyByteArray::new(py, decrypted).into_any().into()
                             } else {
-                                return Err(SafetensorError::new_err("raw_mmap is None"));
-                            };
-                            let decrypted = crypto.silent_decrypt(name, data)
-                                .map_err(|e| SafetensorError::new_err(format!("Decryption failed: {e:?}")))?;
-                            PyByteArray::new(py, &decrypted).into_any().into()
-                        }
-                    } else {
-                        storage_slice.into()
-                    };
+                                let data = if let Some(raw_mmap) = &self.raw_mmap {
+                                    if let Storage::Mmap(mmap) = raw_mmap.as_ref() {
+                                        &mmap[info.data_offsets.0 + self.offset
+                                            ..info.data_offsets.1 + self.offset]
+                                    } else {
+                                        return Err(SafetensorError::new_err(
+                                            "raw_mmap is not Mmap",
+                                        ));
+                                    }
+                                } else {
+                                    return Err(SafetensorError::new_err("raw_mmap is None"));
+                                };
+                                let decrypted = crypto.silent_decrypt(name, data).map_err(|e| {
+                                    SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                                })?;
+                                PyByteArray::new(py, &decrypted).into_any().into()
+                            }
+                        } else {
+                            storage_slice.into()
+                        };
 
                     let sys = PyModule::import(py, intern!(py, "sys"))?;
                     let byteorder: String = sys.getattr(intern!(py, "byteorder"))?.extract()?;
@@ -1372,11 +1396,12 @@ impl PySafeSlice {
                 };
                 let data = &mmap[self.info.data_offsets.0 + self.offset
                     ..self.info.data_offsets.1 + self.offset];
-                
+
                 // MODIFIED: Decrypt if crypto is present
                 let data = if let Some(crypto) = &self.crypto {
-                    crypto.silent_decrypt(&self.name, data)
-                        .map_err(|e| SafetensorError::new_err(format!("Decryption failed: {e:?}")))?
+                    crypto.silent_decrypt(&self.name, data).map_err(|e| {
+                        SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                    })?
                 } else {
                     data
                 };
@@ -1449,24 +1474,31 @@ impl PySafeSlice {
                     .call1((slice,))?;
 
                 let slices = slices.into_pyobject(py)?;
-                
+
                 // MODIFIED: Handle encrypted tensors using raw_mmap
-                let array: PyObject = if self.crypto.as_ref().and_then(|c| c.get(&self.name)).is_some() {
+                let array: PyObject = if self
+                    .crypto
+                    .as_ref()
+                    .and_then(|c| c.get(&self.name))
+                    .is_some()
+                {
                     let crypto = self.crypto.as_ref().unwrap();
                     if let Some(decrypted) = crypto.get_buffer(&self.name) {
                         PyByteArray::new(py, decrypted).into_any().into()
                     } else {
                         let data = if let Some(raw_mmap) = &self.raw_mmap {
                             if let Storage::Mmap(mmap) = raw_mmap.as_ref() {
-                                &mmap[self.info.data_offsets.0 + self.offset..self.info.data_offsets.1 + self.offset]
+                                &mmap[self.info.data_offsets.0 + self.offset
+                                    ..self.info.data_offsets.1 + self.offset]
                             } else {
                                 return Err(SafetensorError::new_err("raw_mmap is not Mmap"));
                             }
                         } else {
                             return Err(SafetensorError::new_err("raw_mmap is None"));
                         };
-                        let decrypted = crypto.silent_decrypt(&self.name, data)
-                            .map_err(|e| SafetensorError::new_err(format!("Decryption failed: {e:?}")))?;
+                        let decrypted = crypto.silent_decrypt(&self.name, data).map_err(|e| {
+                            SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                        })?;
                         PyByteArray::new(py, &decrypted).into_any().into()
                     }
                 } else {
@@ -1561,22 +1593,29 @@ impl PySafeSlice {
                 // MODIFIED: Handle encrypted tensors using raw_mmap
                 // For encrypted tensors, we need to decrypt and use paddle.to_tensor()
                 // For non-encrypted tensors, use the original storage_slice.view() directly
-                let mut tensor = if self.crypto.as_ref().and_then(|c| c.get(&self.name)).is_some() {
+                let mut tensor = if self
+                    .crypto
+                    .as_ref()
+                    .and_then(|c| c.get(&self.name))
+                    .is_some()
+                {
                     let crypto = self.crypto.as_ref().unwrap();
                     let array: PyObject = if let Some(decrypted) = crypto.get_buffer(&self.name) {
                         PyByteArray::new(py, decrypted).into_any().into()
                     } else {
                         let data = if let Some(raw_mmap) = &self.raw_mmap {
                             if let Storage::Mmap(mmap) = raw_mmap.as_ref() {
-                                &mmap[self.info.data_offsets.0 + self.offset..self.info.data_offsets.1 + self.offset]
+                                &mmap[self.info.data_offsets.0 + self.offset
+                                    ..self.info.data_offsets.1 + self.offset]
                             } else {
                                 return Err(SafetensorError::new_err("raw_mmap is not Mmap"));
                             }
                         } else {
                             return Err(SafetensorError::new_err("raw_mmap is None"));
                         };
-                        let decrypted = crypto.silent_decrypt(&self.name, data)
-                            .map_err(|e| SafetensorError::new_err(format!("Decryption failed: {e:?}")))?;
+                        let decrypted = crypto.silent_decrypt(&self.name, data).map_err(|e| {
+                            SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                        })?;
                         PyByteArray::new(py, &decrypted).into_any().into()
                     };
                     // Encrypted path: use paddle.to_tensor() for decrypted bytes

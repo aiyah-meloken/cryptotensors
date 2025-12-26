@@ -5,8 +5,8 @@
 // This file is NEW and was not present in the original safetensors project.
 
 use crate::cryptotensors::CryptoTensorsError;
-use ring::signature::{Ed25519KeyPair, UnparsedPublicKey};
 use ring::signature;
+use ring::signature::{Ed25519KeyPair, UnparsedPublicKey};
 
 /// Supported signature algorithms for header signing
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,4 +106,3 @@ pub fn verify_signature(
         }
     }
 }
-

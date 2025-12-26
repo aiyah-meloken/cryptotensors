@@ -5,8 +5,8 @@
 // This file is NEW and was not present in the original safetensors project.
 
 use crate::cryptotensors::CryptoTensorsError;
-use serde::{Deserialize, Serialize};
 use regorus::Engine;
+use serde::{Deserialize, Serialize};
 
 /// Access policy for tensor model loading and remote KMS validation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,7 +14,7 @@ pub struct AccessPolicy {
     /// OPA policy content for tensor model loading validation
     #[serde(rename = "local")]
     local_policy: String,
-    
+
     /// OPA policy content for KMS key release validation
     #[serde(rename = "remote")]
     remote_policy: String,
@@ -52,9 +52,12 @@ impl AccessPolicy {
         // Parse result
         match result {
             regorus::Value::Bool(allowed) => Ok(allowed),
-            regorus::Value::Undefined => Err(CryptoTensorsError::Policy("Policy returned undefined".to_string())),
-            _ => Err(CryptoTensorsError::Policy("Policy did not return a boolean".to_string())),
+            regorus::Value::Undefined => Err(CryptoTensorsError::Policy(
+                "Policy returned undefined".to_string(),
+            )),
+            _ => Err(CryptoTensorsError::Policy(
+                "Policy did not return a boolean".to_string(),
+            )),
         }
     }
 }
-

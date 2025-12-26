@@ -7,15 +7,15 @@
 // KeyMaterial is a pure data structure for JWK key storage.
 // Key loading is delegated to the registry module via KeyProvider implementations.
 
-use crate::encryption::EncryptionAlgorithm;
-use crate::signing::SignatureAlgorithm;
 use crate::cryptotensors::CryptoTensorsError;
+use crate::encryption::EncryptionAlgorithm;
 use crate::registry;
+use crate::signing::SignatureAlgorithm;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use once_cell::sync::OnceCell;
-use ring::signature::{Ed25519KeyPair, KeyPair};
 use ring::rand::{self, SecureRandom};
-use serde::{Deserialize, Serialize, de::Error, Deserializer};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use ring::signature::{Ed25519KeyPair, KeyPair};
+use serde::{de::Error, Deserialize, Deserializer, Serialize};
 
 /// Validation mode for Key Material
 ///
@@ -54,7 +54,8 @@ mod key_material_serde {
         let value: Option<String> = Option::deserialize(deserializer)?;
         let cell = OnceCell::new();
         if let Some(v) = value {
-            cell.set(Some(v)).map_err(|_| D::Error::custom("Failed to set OnceCell value"))?;
+            cell.set(Some(v))
+                .map_err(|_| D::Error::custom("Failed to set OnceCell value"))?;
         }
         Ok(cell)
     }
@@ -69,10 +70,10 @@ pub struct KeyMaterial {
 
     /// The algorithm used for encryption or signing
     pub alg: String,
-    
+
     #[serde(skip_serializing_if = "Option::is_none")]
     kid: Option<String>,
-    
+
     /// The master key encoded in base64 for encryption
     #[serde(skip_serializing, default)]
     #[serde(with = "key_material_serde")]
@@ -109,23 +110,33 @@ impl KeyMaterial {
             key_type,
             alg,
             kid,
-            k: OnceCell::new(), 
+            k: OnceCell::new(),
             x_pub: OnceCell::new(),
             d_priv: OnceCell::new(),
             jku,
         };
 
         if let Some(k) = k {
-            key_material.k.set(Some(BASE64.encode(&k)))
+            key_material
+                .k
+                .set(Some(BASE64.encode(&k)))
                 .map_err(|_| CryptoTensorsError::KeyCreation("Failed to set key".to_string()))?;
         }
         if let Some(x_pub) = x_pub {
-            key_material.x_pub.set(Some(BASE64.encode(&x_pub)))
-                .map_err(|_| CryptoTensorsError::KeyCreation("Failed to set public key".to_string()))?;
+            key_material
+                .x_pub
+                .set(Some(BASE64.encode(&x_pub)))
+                .map_err(|_| {
+                    CryptoTensorsError::KeyCreation("Failed to set public key".to_string())
+                })?;
         }
         if let Some(d_priv) = d_priv {
-            key_material.d_priv.set(Some(BASE64.encode(&d_priv)))
-                .map_err(|_| CryptoTensorsError::KeyCreation("Failed to set private key".to_string()))?;
+            key_material
+                .d_priv
+                .set(Some(BASE64.encode(&d_priv)))
+                .map_err(|_| {
+                    CryptoTensorsError::KeyCreation("Failed to set private key".to_string())
+                })?;
         }
 
         Ok(key_material)
@@ -179,10 +190,10 @@ impl KeyMaterial {
             JwkKeyType::Oct => registry::get_master_key(self.jku.as_deref(), self.kid.as_deref())?,
             JwkKeyType::Okp => registry::get_verify_key(self.jku.as_deref(), self.kid.as_deref())?,
         };
-        
+
         // Parse and validate the JWK
         let key = Self::from_jwk(&jwk, false)?;
-        
+
         // Update this key material with the loaded key
         self.update_from_key(&key)
     }
@@ -193,7 +204,8 @@ impl KeyMaterial {
         match self.key_type {
             JwkKeyType::Oct => {
                 if let Some(Some(k)) = key.k.get() {
-                    self.k.set(Some(k.clone()))
+                    self.k
+                        .set(Some(k.clone()))
                         .map_err(|_| CryptoTensorsError::MissingMasterKey)?;
                 } else {
                     return Err(CryptoTensorsError::MissingMasterKey);
@@ -201,7 +213,8 @@ impl KeyMaterial {
             }
             JwkKeyType::Okp => {
                 if let Some(Some(x_pub)) = key.x_pub.get() {
-                    self.x_pub.set(Some(x_pub.clone()))
+                    self.x_pub
+                        .set(Some(x_pub.clone()))
                         .map_err(|_| CryptoTensorsError::MissingVerificationKey)?;
                 } else {
                     return Err(CryptoTensorsError::MissingVerificationKey);
@@ -217,14 +230,18 @@ impl KeyMaterial {
     pub fn validate(&self, mode: ValidateMode) -> Result<(), CryptoTensorsError> {
         // Validate key type
         if self.key_type != JwkKeyType::Oct && self.key_type != JwkKeyType::Okp {
-            return Err(CryptoTensorsError::InvalidKey("Invalid key type".to_string()));
+            return Err(CryptoTensorsError::InvalidKey(
+                "Invalid key type".to_string(),
+            ));
         }
 
         // Validate algorithm based on mode
         match mode {
             ValidateMode::ForCreation | ValidateMode::FromHeader => {
                 if self.alg.is_empty() {
-                    return Err(CryptoTensorsError::InvalidAlgorithm("Missing alg field".to_string()));
+                    return Err(CryptoTensorsError::InvalidAlgorithm(
+                        "Missing alg field".to_string(),
+                    ));
                 }
             }
             ValidateMode::FromJwk => {
@@ -253,20 +270,18 @@ impl KeyMaterial {
                     }
                 }
             }
-            ValidateMode::FromJwk => {
-                match self.key_type {
-                    JwkKeyType::Oct => {
-                        if self.k.get().and_then(|k| k.as_ref()).is_none() {
-                            return Err(CryptoTensorsError::MissingMasterKey);
-                        }
-                    }
-                    JwkKeyType::Okp => {
-                        if self.x_pub.get().and_then(|k| k.as_ref()).is_none() {
-                            return Err(CryptoTensorsError::MissingVerificationKey);
-                        }
+            ValidateMode::FromJwk => match self.key_type {
+                JwkKeyType::Oct => {
+                    if self.k.get().and_then(|k| k.as_ref()).is_none() {
+                        return Err(CryptoTensorsError::MissingMasterKey);
                     }
                 }
-            }
+                JwkKeyType::Okp => {
+                    if self.x_pub.get().and_then(|k| k.as_ref()).is_none() {
+                        return Err(CryptoTensorsError::MissingVerificationKey);
+                    }
+                }
+            },
             ValidateMode::FromHeader => {
                 // Keys are not required when loading from header (will be loaded from registry)
             }
@@ -277,17 +292,21 @@ impl KeyMaterial {
             match self.key_type {
                 JwkKeyType::Oct => {
                     if EncryptionAlgorithm::from_str(&self.alg).is_none() {
-                        return Err(CryptoTensorsError::InvalidAlgorithm("Invalid encryption algorithm".to_string()));
+                        return Err(CryptoTensorsError::InvalidAlgorithm(
+                            "Invalid encryption algorithm".to_string(),
+                        ));
                     }
                 }
                 JwkKeyType::Okp => {
                     if SignatureAlgorithm::from_str(&self.alg).is_none() {
-                        return Err(CryptoTensorsError::InvalidAlgorithm("Invalid signature algorithm".to_string()));
+                        return Err(CryptoTensorsError::InvalidAlgorithm(
+                            "Invalid signature algorithm".to_string(),
+                        ));
                     }
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -312,8 +331,9 @@ impl KeyMaterial {
         let enc_alg = EncryptionAlgorithm::from_str(&alg)
             .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(alg.clone()))?;
         let key_bytes = if let Some(ref b64_str) = key_b64 {
-            let bytes = BASE64.decode(b64_str)
-                .map_err(|e| CryptoTensorsError::InvalidKey(format!("Invalid base64 key: {}", e)))?;
+            let bytes = BASE64.decode(b64_str).map_err(|e| {
+                CryptoTensorsError::InvalidKey(format!("Invalid base64 key: {}", e))
+            })?;
             if bytes.len() != enc_alg.key_len() {
                 return Err(CryptoTensorsError::InvalidKeyLength {
                     expected: enc_alg.key_len(),
@@ -329,15 +349,7 @@ impl KeyMaterial {
                 .map_err(|e| CryptoTensorsError::RandomGeneration(e.to_string()))?;
             key
         };
-        KeyMaterial::new_internal(
-            JwkKeyType::Oct,
-            alg,
-            kid,
-            jku,
-            Some(key_bytes),
-            None,
-            None,
-        )
+        KeyMaterial::new_internal(JwkKeyType::Oct, alg, kid, jku, Some(key_bytes), None, None)
     }
 
     /// Create a new signing key (kty=okp)
@@ -365,8 +377,9 @@ impl KeyMaterial {
         match sig_alg {
             SignatureAlgorithm::Ed25519 => {
                 let public = if let Some(pub_b64) = public_b64 {
-                    let pub_bytes = BASE64.decode(&pub_b64)
-                        .map_err(|e| CryptoTensorsError::InvalidKey(format!("Invalid base64 public key: {}", e)))?;
+                    let pub_bytes = BASE64.decode(&pub_b64).map_err(|e| {
+                        CryptoTensorsError::InvalidKey(format!("Invalid base64 public key: {}", e))
+                    })?;
                     if pub_bytes.len() != 32 {
                         return Err(CryptoTensorsError::InvalidKeyLength {
                             expected: 32,
@@ -374,10 +387,13 @@ impl KeyMaterial {
                         });
                     }
                     Some(pub_bytes)
-                } else { None };
+                } else {
+                    None
+                };
                 let private = if let Some(priv_b64) = private_b64 {
-                    let priv_bytes = BASE64.decode(&priv_b64)
-                        .map_err(|e| CryptoTensorsError::InvalidKey(format!("Invalid base64 private key: {}", e)))?;
+                    let priv_bytes = BASE64.decode(&priv_b64).map_err(|e| {
+                        CryptoTensorsError::InvalidKey(format!("Invalid base64 private key: {}", e))
+                    })?;
                     if priv_bytes.len() != 32 {
                         return Err(CryptoTensorsError::InvalidKeyLength {
                             expected: 32,
@@ -385,19 +401,28 @@ impl KeyMaterial {
                         });
                     }
                     Some(priv_bytes)
-                } else { None };
+                } else {
+                    None
+                };
                 // If both are None, generate new key pair
                 let (public, private) = if public.is_none() && private.is_none() {
                     let rng = rand::SystemRandom::new();
                     let mut private_key = [0u8; 32];
-                    rng.fill(&mut private_key).map_err(|e| CryptoTensorsError::RandomGeneration(e.to_string()))?;
+                    rng.fill(&mut private_key)
+                        .map_err(|e| CryptoTensorsError::RandomGeneration(e.to_string()))?;
                     let key_pair = Ed25519KeyPair::from_seed_unchecked(&private_key)
                         .map_err(|e| CryptoTensorsError::KeyCreation(e.to_string()))?;
-                    (Some(key_pair.public_key().as_ref().to_vec()), Some(private_key.to_vec()))
+                    (
+                        Some(key_pair.public_key().as_ref().to_vec()),
+                        Some(private_key.to_vec()),
+                    )
                 } else if public.is_some() && private.is_some() {
                     // Try to verify the key pair
-                    Ed25519KeyPair::from_seed_and_public_key(private.clone().unwrap().as_slice(), public.clone().unwrap().as_slice() )
-                        .map_err(|e| CryptoTensorsError::KeyCreation(e.to_string()))?;
+                    Ed25519KeyPair::from_seed_and_public_key(
+                        private.clone().unwrap().as_slice(),
+                        public.clone().unwrap().as_slice(),
+                    )
+                    .map_err(|e| CryptoTensorsError::KeyCreation(e.to_string()))?;
                     (public, private)
                 } else if private.is_some() && public.is_none() {
                     // If only private key is provided, derive public key from it
@@ -409,15 +434,7 @@ impl KeyMaterial {
                     // Only public key provided (verification-only key) - this is valid for verification
                     (public, private)
                 };
-                KeyMaterial::new_internal(
-                    JwkKeyType::Okp,
-                    alg,
-                    kid,
-                    jku,
-                    None,
-                    public,
-                    private,
-                )
+                KeyMaterial::new_internal(JwkKeyType::Okp, alg, kid, jku, None, public, private)
             }
         }
     }
@@ -456,7 +473,8 @@ impl KeyMaterial {
             x_pub: self.x_pub.get().and_then(|v| v.as_ref()),
             d_priv: self.d_priv.get().and_then(|v| v.as_ref()),
         };
-        serde_json::to_string(&jwk).map_err(|e| CryptoTensorsError::KeyCreation(format!("Failed to serialize JWK: {}", e)))
+        serde_json::to_string(&jwk)
+            .map_err(|e| CryptoTensorsError::KeyCreation(format!("Failed to serialize JWK: {}", e)))
     }
 
     /// Get the master key as decoded bytes
@@ -466,11 +484,14 @@ impl KeyMaterial {
     /// * `Err(CryptoTensorsError::MissingMasterKey)` - If no master key is set
     /// * `Err(CryptoTensorsError::InvalidKey)` - If base64 decoding fails
     pub fn get_master_key_bytes(&self) -> Result<Vec<u8>, CryptoTensorsError> {
-        let k = self.k.get()
+        let k = self
+            .k
+            .get()
             .and_then(|v| v.as_ref())
             .ok_or(CryptoTensorsError::MissingMasterKey)?;
-        BASE64.decode(k)
-            .map_err(|e| CryptoTensorsError::InvalidKey(format!("Invalid base64 master key: {}", e)))
+        BASE64.decode(k).map_err(|e| {
+            CryptoTensorsError::InvalidKey(format!("Invalid base64 master key: {}", e))
+        })
     }
 
     /// Get the public key as decoded bytes
@@ -480,11 +501,14 @@ impl KeyMaterial {
     /// * `Err(CryptoTensorsError::MissingVerificationKey)` - If no public key is set
     /// * `Err(CryptoTensorsError::InvalidKey)` - If base64 decoding fails
     pub fn get_public_key_bytes(&self) -> Result<Vec<u8>, CryptoTensorsError> {
-        let x = self.x_pub.get()
+        let x = self
+            .x_pub
+            .get()
             .and_then(|v| v.as_ref())
             .ok_or(CryptoTensorsError::MissingVerificationKey)?;
-        BASE64.decode(x)
-            .map_err(|e| CryptoTensorsError::InvalidKey(format!("Invalid base64 public key: {}", e)))
+        BASE64.decode(x).map_err(|e| {
+            CryptoTensorsError::InvalidKey(format!("Invalid base64 public key: {}", e))
+        })
     }
 
     /// Get the private key as decoded bytes
@@ -494,11 +518,14 @@ impl KeyMaterial {
     /// * `Err(CryptoTensorsError::MissingSigningKey)` - If no private key is set
     /// * `Err(CryptoTensorsError::InvalidKey)` - If base64 decoding fails
     pub fn get_private_key_bytes(&self) -> Result<Vec<u8>, CryptoTensorsError> {
-        let d = self.d_priv.get()
+        let d = self
+            .d_priv
+            .get()
             .and_then(|v| v.as_ref())
             .ok_or(CryptoTensorsError::MissingSigningKey)?;
-        BASE64.decode(d)
-            .map_err(|e| CryptoTensorsError::InvalidKey(format!("Invalid base64 private key: {}", e)))
+        BASE64.decode(d).map_err(|e| {
+            CryptoTensorsError::InvalidKey(format!("Invalid base64 private key: {}", e))
+        })
     }
 
     /// Parse KeyMaterial from a serde_json::Value (header)
@@ -510,12 +537,12 @@ impl KeyMaterial {
     /// * `Ok<KeyMaterial>` - Key material
     /// * `Err(CryptoTensorsError)` - If parsing or validation fails
     pub fn from_header(header: &serde_json::Value) -> Result<Self, CryptoTensorsError> {
-        let key: KeyMaterial = serde_json::from_value(header.clone())
-            .map_err(|e| CryptoTensorsError::InvalidKey(format!("Failed to parse key material: {}", e)))?;
+        let key: KeyMaterial = serde_json::from_value(header.clone()).map_err(|e| {
+            CryptoTensorsError::InvalidKey(format!("Failed to parse key material: {}", e))
+        })?;
         key.validate(ValidateMode::FromHeader)?;
         Ok(key)
     }
-
 
     /// Create KeyMaterial from JWK string
     ///
@@ -526,15 +553,21 @@ impl KeyMaterial {
     /// # Returns
     /// * `Ok(KeyMaterial)` - Successfully created key material
     /// * `Err(CryptoTensorsError)` - If parsing or validation fails
-    pub fn from_jwk(jwk_str: &serde_json::Value, is_for_save: bool) -> Result<Self, CryptoTensorsError> {
+    pub fn from_jwk(
+        jwk_str: &serde_json::Value,
+        is_for_save: bool,
+    ) -> Result<Self, CryptoTensorsError> {
         let key_material: KeyMaterial = serde_json::from_value(jwk_str.clone())
             .map_err(|e| CryptoTensorsError::InvalidKey(format!("Failed to parse JWK: {}", e)))?;
-        
+
         // Requires symmetric key or private key for creation mode
         // Requires symmetric key or public key for JWK loading mode
-        key_material.validate(if is_for_save { ValidateMode::ForCreation } else { ValidateMode::FromJwk })?;
-        
+        key_material.validate(if is_for_save {
+            ValidateMode::ForCreation
+        } else {
+            ValidateMode::FromJwk
+        })?;
+
         Ok(key_material)
     }
 }
-

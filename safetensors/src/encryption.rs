@@ -5,8 +5,8 @@
 // This file is NEW and was not present in the original safetensors project.
 
 use crate::cryptotensors::CryptoTensorsError;
-use ring::{aead, rand};
 use ring::rand::SecureRandom;
+use ring::{aead, rand};
 
 /// Supported encryption algorithms for tensor data encryption
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,12 +116,12 @@ pub fn encrypt_data(
 ) -> Result<(Vec<u8>, Vec<u8>), CryptoTensorsError> {
     // If input is empty, return empty IV and tag
     if in_out.is_empty() {
-    return Ok((Vec::new(), Vec::new()));
+        return Ok((Vec::new(), Vec::new()));
     }
 
     // Validate inputs
     let algo = EncryptionAlgorithm::from_str(algo_name)
-    .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
+        .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
 
     if key.is_empty() {
         return Err(CryptoTensorsError::InvalidKeyLength {
@@ -199,7 +199,7 @@ pub fn decrypt_data(
 
     // Validate inputs
     let algo = EncryptionAlgorithm::from_str(algo_name)
-    .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
+        .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
 
     if key.is_empty() {
         return Err(CryptoTensorsError::InvalidKeyLength {
@@ -222,16 +222,17 @@ pub fn decrypt_data(
             actual: 0,
         });
     }
-    
+
     let key = aead::UnboundKey::new(aead_algo, key)
         .map_err(|e| CryptoTensorsError::KeyCreation(e.to_string()))?;
     let key = aead::LessSafeKey::new(key);
 
-    let nonce =
-        aead::Nonce::try_assume_unique_for_key(iv).map_err(|_e| CryptoTensorsError::InvalidIvLength {
+    let nonce = aead::Nonce::try_assume_unique_for_key(iv).map_err(|_e| {
+        CryptoTensorsError::InvalidIvLength {
             expected: aead_algo.nonce_len(),
             actual: iv.len(),
-        })?;
+        }
+    })?;
 
     // Create tag using algorithm-specific method
     let tag = algo
@@ -247,4 +248,3 @@ pub fn decrypt_data(
 
     Ok(())
 }
-

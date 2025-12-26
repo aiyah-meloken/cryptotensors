@@ -3,15 +3,15 @@
 // functions, and transparent encryption/decryption support. See NOTICE file for details.
 
 //! Module Containing the most important structures
+use crate::cryptotensors::{CryptoTensors, SerializeCryptoConfig};
 use crate::lib::{Cow, HashMap, String, ToString, Vec};
 use crate::slice::{InvalidSlice, SliceIterator, TensorIndexer};
-use crate::cryptotensors::{CryptoTensors, SerializeCryptoConfig};
 use core::fmt::Display;
 use core::str::Utf8Error;
 use serde::{ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::BTreeMap;
 #[cfg(feature = "std")]
 use std::io::Write;
-use std::collections::BTreeMap;
 
 const MAX_HEADER_SIZE: usize = 100_000_000;
 const N_LEN: usize = size_of::<u64>();
@@ -237,7 +237,15 @@ fn prepare<'data, S, V, I>(
     data: I,
     data_info: Option<HashMap<String, String>>,
     crypto_config: Option<&SerializeCryptoConfig>,
-) -> Result<(PreparedData, Vec<V>, Option<CryptoTensors<'data>>, Vec<String>), SafeTensorError>
+) -> Result<
+    (
+        PreparedData,
+        Vec<V>,
+        Option<CryptoTensors<'data>>,
+        Vec<String>,
+    ),
+    SafeTensorError,
+>
 where
     S: AsRef<str> + Ord + Display,
     V: View,
@@ -251,7 +259,10 @@ where
     });
 
     // Collect tensor names for crypto initialization
-    let tensor_names: Vec<String> = data.iter().map(|(name, _)| name.as_ref().to_string()).collect();
+    let tensor_names: Vec<String> = data
+        .iter()
+        .map(|(name, _)| name.as_ref().to_string())
+        .collect();
 
     // Initialize CryptoTensors if config is provided
     let crypto = if let Some(config) = crypto_config {
@@ -266,15 +277,17 @@ where
 
     for (name, tensor) in data {
         let tensor_name = name.as_ref().to_string();
-        
+
         // Encrypt tensor data if crypto is configured for this tensor
         let n = if let Some(ref c) = crypto {
             c.silent_encrypt(&tensor_name, tensor.data().as_ref())?;
-            c.get_buffer(&tensor_name).map(|b| b.len()).unwrap_or(tensor.data_len())
+            c.get_buffer(&tensor_name)
+                .map(|b| b.len())
+                .unwrap_or(tensor.data_len())
         } else {
             tensor.data_len()
         };
-        
+
         let tensor_info = TensorInfo {
             dtype: tensor.dtype(),
             shape: tensor.shape().to_vec(),
@@ -312,7 +325,7 @@ where
 }
 
 /// Serialize to an owned byte buffer the dictionnary of tensors.
-/// 
+///
 /// # Arguments
 /// * `data` - Iterator of (name, tensor) pairs
 /// * `data_info` - Optional metadata to include in the header
@@ -363,7 +376,7 @@ pub fn serialize<
 /// Serialize to a regular file the dictionnary of tensors.
 /// Writing directly to file reduces the need to allocate the whole amount to
 /// memory.
-/// 
+///
 /// # Arguments
 /// * `data` - Iterator of (name, tensor) pairs
 /// * `data_info` - Optional metadata to include in the header
@@ -491,11 +504,15 @@ impl<'data> SafeTensors<'data> {
     pub fn deserialize(buffer: &'data [u8]) -> Result<Self, SafeTensorError> {
         let (n, metadata) = SafeTensors::read_metadata(buffer)?;
         let data = &buffer[N_LEN + n..];
-        
+
         // Initialize CryptoTensors from header if encryption metadata is present
         let crypto = CryptoTensors::from_header(&metadata)?;
-        
-        Ok(Self { metadata, data, crypto })
+
+        Ok(Self {
+            metadata,
+            data,
+            crypto,
+        })
     }
 
     /// Returns the tensors contained within the SafeTensors.
@@ -506,14 +523,14 @@ impl<'data> SafeTensors<'data> {
         for (name, &index) in &self.metadata.index_map {
             let info = &self.metadata.tensors[index];
             let raw_data = &self.data[info.data_offsets.0..info.data_offsets.1];
-            
+
             // Transparently decrypt if crypto is available
             let data = if let Some(ref crypto) = self.crypto {
                 crypto.silent_decrypt(name, raw_data).unwrap_or(raw_data)
             } else {
                 raw_data
             };
-            
+
             let tensorview = TensorView {
                 dtype: info.dtype,
                 shape: info.shape.clone(),
@@ -531,14 +548,14 @@ impl<'data> SafeTensors<'data> {
         self.metadata.index_map.iter().map(move |(name, &idx)| {
             let info = &self.metadata.tensors[idx];
             let raw_data = &self.data[info.data_offsets.0..info.data_offsets.1];
-            
+
             // Transparently decrypt if crypto is available
             let data = if let Some(ref crypto) = self.crypto {
                 crypto.silent_decrypt(name, raw_data).unwrap_or(raw_data)
             } else {
                 raw_data
             };
-            
+
             (
                 name.as_str(),
                 TensorView {
@@ -567,7 +584,7 @@ impl<'data> SafeTensors<'data> {
             .ok_or_else(|| SafeTensorError::TensorNotFound(tensor_name.to_string()))?;
 
         let raw_data = &self.data[info.data_offsets.0..info.data_offsets.1];
-        
+
         // Transparently decrypt if crypto is available
         let data = if let Some(ref crypto) = self.crypto {
             crypto.silent_decrypt(tensor_name, raw_data)?

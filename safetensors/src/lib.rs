@@ -13,14 +13,14 @@ pub mod tensor;
 pub mod cryptotensors;
 /// Encryption/decryption functions (AES-GCM, ChaCha20-Poly1305)
 pub mod encryption;
-/// Signing/verification functions (Ed25519)
-pub mod signing;
 /// Key management (JWK format)
 pub mod key;
 /// Access policy engine for model loading validation (Rego)
 pub mod policy;
 /// Pluggable KeyProvider registry for external key sources
 pub mod registry;
+/// Signing/verification functions (Ed25519)
+pub mod signing;
 
 /// serialize_to_file only valid in std
 #[cfg(feature = "std")]
@@ -28,25 +28,18 @@ pub use tensor::serialize_to_file;
 pub use tensor::{serialize, Dtype, SafeTensorError, SafeTensors, View};
 
 // CryptoTensors: Re-export key types
-pub use cryptotensors::{CryptoTensorsError, CryptoTensors, SerializeCryptoConfig};
+pub use cryptotensors::{CryptoTensors, CryptoTensorsError, SerializeCryptoConfig};
 pub use key::KeyMaterial;
 pub use policy::AccessPolicy;
 pub use registry::{
-    KeyProvider, 
-    TempKeyProvider,
-    register_provider,
-    register_provider_with_priority,
-    disable_provider,
-    enable_provider,
-    PRIORITY_TEMP,
-    PRIORITY_FILE,
-    PRIORITY_ENV,
+    disable_provider, enable_provider, register_provider, register_provider_with_priority,
+    KeyProvider, TempKeyProvider, PRIORITY_ENV, PRIORITY_FILE, PRIORITY_TEMP,
 };
 
-#[cfg(feature = "provider-file")]
-pub use registry::FileKeyProvider;
 #[cfg(feature = "provider-env")]
 pub use registry::EnvKeyProvider;
+#[cfg(feature = "provider-file")]
+pub use registry::FileKeyProvider;
 
 #[cfg(not(feature = "std"))]
 #[macro_use]

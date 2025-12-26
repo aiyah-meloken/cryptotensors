@@ -22,4 +22,14 @@ def crypto_config():
 
     algo = os.environ.get("BENCH_CRYPTO_ALGO", "aes256gcm")
     keys = generate_test_keys(algorithm=algo)
-    return create_crypto_config(**keys)
+    config = create_crypto_config(**keys)
+
+    # Register key provider for decryption
+    import cryptotensors
+
+    cryptotensors.register_key_provider(keys=[keys["enc_key"], keys["sign_key"]])
+
+    yield config
+
+    # Clean up key provider after test
+    cryptotensors.disable_provider("temp")

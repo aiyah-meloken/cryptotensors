@@ -32,15 +32,25 @@ def create_gpt2(n_layers: int):
 
 def test_tf_crypto_save_cpu(benchmark, crypto_config):
     """Benchmark saving GPT-2 with encryption in TF."""
-    weights = create_gpt2(12)
-    with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
-        benchmark(save_file, weights, f.name, config=crypto_config)
-    os.unlink(f.name)
+    weights_template = create_gpt2(12)
+
+    def save_with_fresh_data():
+        # Create a fresh copy each time since _tf2np modifies dict in place
+        weights = {k: v for k, v in weights_template.items()}
+        with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
+            save_file(weights, f.name, config=crypto_config)
+            return f.name
+
+    filename = benchmark(save_with_fresh_data)
+    if os.path.exists(filename):
+        os.unlink(filename)
 
 
 def test_tf_crypto_load_cpu(benchmark, crypto_config):
     """Benchmark loading GPT-2 with encryption in TF."""
-    weights = create_gpt2(12)
+    weights_template = create_gpt2(12)
+    # Create a copy for saving (since _tf2np modifies dict in place)
+    weights = {k: v for k, v in weights_template.items()}
     with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
         save_file(weights, f.name, config=crypto_config)
         benchmark(load_file, f.name)

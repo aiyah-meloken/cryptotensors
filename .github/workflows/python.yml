@@ -132,6 +132,7 @@ jobs:
         run: |
           cargo test
           pip install ".[testing]"
+          pip install ../compatible
           pytest -sv tests/
 
       - name: Run tests (freethreaded)
@@ -140,6 +141,7 @@ jobs:
           cargo test
           pip install ".[testingfree]"
           pip install pytest numpy
+          pip install ../compatible
           pytest -sv tests/test_pt*
           pytest -sv tests/test_simple.py
 

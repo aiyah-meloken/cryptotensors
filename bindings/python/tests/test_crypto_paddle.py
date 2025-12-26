@@ -8,6 +8,7 @@ from cryptotensors.paddle import load_file, save_file
 from cryptotensors import safe_open
 from crypto_utils import generate_test_keys, create_crypto_config
 
+
 class CryptoPaddleTestCase(unittest.TestCase):
     def setUp(self):
         self.data = {
@@ -17,10 +18,9 @@ class CryptoPaddleTestCase(unittest.TestCase):
         self.keys = generate_test_keys(algorithm="aes256gcm")
         self.config = create_crypto_config(**self.keys)
         # Register key provider for decryption
-        cryptotensors.register_key_provider(keys=[
-            self.keys["enc_key"],
-            self.keys["sign_key"]
-        ])
+        cryptotensors.register_key_provider(
+            keys=[self.keys["enc_key"], self.keys["sign_key"]]
+        )
 
     def tearDown(self):
         # Clean up key provider
@@ -43,16 +43,17 @@ class CryptoPaddleTestCase(unittest.TestCase):
                 keys = generate_test_keys(algorithm=algo)
                 config = create_crypto_config(**keys)
                 # Register keys for this algorithm
-                cryptotensors.register_key_provider(keys=[
-                    keys["enc_key"],
-                    keys["sign_key"]
-                ])
+                cryptotensors.register_key_provider(
+                    keys=[keys["enc_key"], keys["sign_key"]]
+                )
                 try:
-                    with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
+                    with tempfile.NamedTemporaryFile(
+                        suffix=".safetensors", delete=False
+                    ) as f:
                         save_file(self.data, f.name, config=config)
                         reloaded = load_file(f.name)
                         os.unlink(f.name)
-                    
+
                     for k, v in self.data.items():
                         self.assertTrue(np.allclose(v.numpy(), reloaded[k].numpy()))
                 finally:
@@ -63,14 +64,15 @@ class CryptoPaddleTestCase(unittest.TestCase):
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
             save_file(self.data, f.name, config=config)
             reloaded = load_file(f.name)
-            
+
             with safe_open(f.name, framework="paddle") as handle:
                 metadata = handle.metadata()
                 import json
+
                 enc_info = json.loads(metadata.get("__encryption__", "{}"))
                 self.assertIn("test", enc_info)
                 self.assertNotIn("test2", enc_info)
-                
+
             os.unlink(f.name)
 
         for k, v in self.data.items():
@@ -82,6 +84,5 @@ class CryptoPaddleTestCase(unittest.TestCase):
             save_file(data, f.name, config=self.config)
             reloaded = load_file(f.name)
             os.unlink(f.name)
-        
-        self.assertTrue(np.allclose(data["bf16"].numpy(), reloaded["bf16"].numpy()))
 
+        self.assertTrue(np.allclose(data["bf16"].numpy(), reloaded["bf16"].numpy()))

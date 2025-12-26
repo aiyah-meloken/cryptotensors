@@ -8,12 +8,14 @@ HAS_MLX = False
 if platform.system() == "Darwin":
     try:
         import mlx.core as mx
+
         HAS_MLX = True
     except ImportError:
         pass
 
 if HAS_MLX:
     from cryptotensors.mlx import load_file, save_file
+
 
 def create_gpt2(n_layers: int):
     """Create GPT-2 model tensors in MLX."""
@@ -38,7 +40,10 @@ def create_gpt2(n_layers: int):
     tensors["ln_f.bias"] = mx.zeros((768))
     return tensors
 
-@pytest.mark.skipif(platform.system() != "Darwin" or not HAS_MLX, reason="MLX only available on macOS")
+
+@pytest.mark.skipif(
+    platform.system() != "Darwin" or not HAS_MLX, reason="MLX only available on macOS"
+)
 def test_mlx_crypto_save_cpu(benchmark, crypto_config):
     """Benchmark saving GPT-2 with encryption in MLX."""
     weights = create_gpt2(12)
@@ -46,7 +51,10 @@ def test_mlx_crypto_save_cpu(benchmark, crypto_config):
         benchmark(save_file, weights, f.name, config=crypto_config)
     os.unlink(f.name)
 
-@pytest.mark.skipif(platform.system() != "Darwin" or not HAS_MLX, reason="MLX only available on macOS")
+
+@pytest.mark.skipif(
+    platform.system() != "Darwin" or not HAS_MLX, reason="MLX only available on macOS"
+)
 def test_mlx_crypto_load_cpu(benchmark, crypto_config):
     """Benchmark loading GPT-2 with encryption in MLX."""
     weights = create_gpt2(12)
@@ -54,4 +62,3 @@ def test_mlx_crypto_load_cpu(benchmark, crypto_config):
         save_file(weights, f.name, config=crypto_config)
         benchmark(load_file, f.name)
     os.unlink(f.name)
-

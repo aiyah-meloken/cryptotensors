@@ -5,6 +5,7 @@ import numpy as np
 import jax.numpy as jnp
 from cryptotensors.flax import load_file, save_file
 
+
 def create_gpt2(n_layers: int):
     """Create GPT-2 model tensors in JAX/Flax."""
     tensors = {}
@@ -28,12 +29,14 @@ def create_gpt2(n_layers: int):
     tensors["ln_f.bias"] = jnp.zeros((768))
     return tensors
 
+
 def test_flax_crypto_save_cpu(benchmark, crypto_config):
     """Benchmark saving GPT-2 with encryption in Flax."""
     weights = create_gpt2(12)
     with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
         benchmark(save_file, weights, f.name, config=crypto_config)
     os.unlink(f.name)
+
 
 def test_flax_crypto_load_cpu(benchmark, crypto_config):
     """Benchmark loading GPT-2 with encryption in Flax."""
@@ -42,4 +45,3 @@ def test_flax_crypto_load_cpu(benchmark, crypto_config):
         save_file(weights, f.name, config=crypto_config)
         benchmark(load_file, f.name)
     os.unlink(f.name)
-

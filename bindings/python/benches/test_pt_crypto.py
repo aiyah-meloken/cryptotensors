@@ -4,6 +4,7 @@ import pytest
 import torch
 from cryptotensors.torch import load_file, save_file
 
+
 def create_gpt2(n_layers: int):
     """Create GPT-2 model tensors."""
     tensors = {}
@@ -27,6 +28,7 @@ def create_gpt2(n_layers: int):
     tensors["ln_f.bias"] = torch.zeros((768))
     return tensors
 
+
 def create_lora(n_layers: int):
     """Create LoRA tensors."""
     tensors = {}
@@ -35,12 +37,14 @@ def create_lora(n_layers: int):
         tensors[f"lora.{i}.down.weight"] = torch.zeros((32, 32))
     return tensors
 
+
 def test_pt_crypto_save_cpu(benchmark, crypto_config):
     """Benchmark saving GPT-2 with encryption on CPU."""
     weights = create_gpt2(12)
     with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
         benchmark(save_file, weights, f.name, config=crypto_config)
     os.unlink(f.name)
+
 
 def test_pt_crypto_load_cpu(benchmark, crypto_config):
     """Benchmark loading GPT-2 with encryption on CPU."""
@@ -50,12 +54,14 @@ def test_pt_crypto_load_cpu(benchmark, crypto_config):
         benchmark(load_file, f.name)
     os.unlink(f.name)
 
+
 def test_pt_crypto_save_cpu_small(benchmark, crypto_config):
     """Benchmark saving LoRA with encryption on CPU."""
     weights = create_lora(500)
     with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
         benchmark(save_file, weights, f.name, config=crypto_config)
     os.unlink(f.name)
+
 
 def test_pt_crypto_load_cpu_small(benchmark, crypto_config):
     """Benchmark loading LoRA with encryption on CPU."""
@@ -65,6 +71,7 @@ def test_pt_crypto_load_cpu_small(benchmark, crypto_config):
         benchmark(load_file, f.name)
     os.unlink(f.name)
 
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires cuda")
 def test_pt_crypto_load_gpu(benchmark, crypto_config):
     """Benchmark loading GPT-2 with encryption on GPU."""
@@ -73,4 +80,3 @@ def test_pt_crypto_load_gpu(benchmark, crypto_config):
         save_file(weights, f.name, config=crypto_config)
         benchmark(load_file, f.name, device="cuda:0")
     os.unlink(f.name)
-

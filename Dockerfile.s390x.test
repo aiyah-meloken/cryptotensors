@@ -12,6 +12,9 @@ COPY . .
 SHELL ["/bin/bash", "-c"]
 WORKDIR /safetensors/bindings/python/
 RUN source /root/.cargo/env && /root/miniconda3/bin/pip install -e .
+WORKDIR /safetensors/bindings/compatible/
+RUN /root/miniconda3/bin/pip install -e .
+WORKDIR /safetensors/bindings/python/
 # Work around error probably caused by https://sourceware.org/bugzilla/show_bug.cgi?id=32653
 # E   ImportError: libopenblas.so.0: cannot enable executable stack as shared object requires: Invalid argument
 ENV GLIBC_TUNABLES=glibc.rtld.execstack=2

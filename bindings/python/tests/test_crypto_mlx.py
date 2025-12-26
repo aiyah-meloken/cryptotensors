@@ -13,6 +13,7 @@ if platform.system() == "Darwin":
         pass
 
 if HAS_MLX:
+    import cryptotensors
     from cryptotensors.mlx import load_file, save_file
     from cryptotensors import safe_open
     from .crypto_utils import generate_test_keys, create_crypto_config
@@ -27,6 +28,15 @@ class CryptoMlxTestCase(unittest.TestCase):
         }
         self.keys = generate_test_keys(algorithm="aes256gcm")
         self.config = create_crypto_config(**self.keys)
+        # Register key provider for decryption
+        cryptotensors.register_key_provider(keys=[
+            self.keys["enc_key"],
+            self.keys["sign_key"]
+        ])
+
+    def tearDown(self):
+        # Clean up key provider
+        cryptotensors.disable_provider("temp")
 
     def test_roundtrip_encrypted(self):
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
@@ -44,13 +54,21 @@ class CryptoMlxTestCase(unittest.TestCase):
             with self.subTest(algo=algo):
                 keys = generate_test_keys(algorithm=algo)
                 config = create_crypto_config(**keys)
-                with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
-                    save_file(self.data, f.name, config=config)
-                    reloaded = load_file(f.name)
-                    os.unlink(f.name)
-                
-                for k, v in self.data.items():
-                    self.assertTrue(mx.allclose(v, reloaded[k]))
+                # Register keys for this algorithm
+                cryptotensors.register_key_provider(keys=[
+                    keys["enc_key"],
+                    keys["sign_key"]
+                ])
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
+                        save_file(self.data, f.name, config=config)
+                        reloaded = load_file(f.name)
+                        os.unlink(f.name)
+                    
+                    for k, v in self.data.items():
+                        self.assertTrue(mx.allclose(v, reloaded[k]))
+                finally:
+                    cryptotensors.disable_provider("temp")
 
     def test_partial_encryption(self):
         config = create_crypto_config(**self.keys, tensors=["test"])

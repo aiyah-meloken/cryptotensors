@@ -19,6 +19,7 @@ def generate_test_keys(algorithm="aes256gcm"):
     
     # Use standard base64 encoding (Rust code uses STANDARD base64)
     enc_key = {
+        "kty": "oct",
         "alg": algorithm,
         "kid": "test-enc-key",
         "k": base64.b64encode(enc_key_bytes).decode('ascii')
@@ -47,6 +48,7 @@ def generate_test_keys(algorithm="aes256gcm"):
         
         # Use standard base64 encoding for JWK format
         sign_key = {
+            "kty": "okp",
             "alg": "ed25519",
             "kid": "test-sign-key",
             "d": base64.b64encode(private_bytes).decode('ascii'),
@@ -62,6 +64,7 @@ def generate_test_keys(algorithm="aes256gcm"):
             RuntimeWarning
         )
         sign_key = {
+            "kty": "okp",
             "alg": "ed25519",
             "kid": "test-sign-key",
             "d": base64.b64encode(secrets.token_bytes(32)).decode('ascii'),

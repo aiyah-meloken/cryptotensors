@@ -242,7 +242,9 @@ def load_model(
 
 
 def save(
-    tensors: Dict[str, torch.Tensor], metadata: Optional[Dict[str, str]] = None
+    tensors: Dict[str, torch.Tensor],
+    metadata: Optional[Dict[str, str]] = None,
+    config: Optional[Dict[str, Any]] = None,
 ) -> bytes:
     """
     Saves a dictionary of tensors into raw bytes in safetensors format.
@@ -254,6 +256,8 @@ def save(
             Optional text only metadata you might want to save in your header.
             For instance it can be useful to specify more about the underlying
             tensors. This is purely informative and does not affect tensor loading.
+        config (`Dict[str, Any]`, *optional*, defaults to `None`):
+            Optional encryption configuration.
 
     Returns:
         `bytes`: The raw bytes representing the format
@@ -261,14 +265,14 @@ def save(
     Example:
 
     ```python
-    from safetensors.torch import save
+    from cryptotensors.torch import save
     import torch
 
     tensors = {"embedding": torch.zeros((512, 1024)), "attention": torch.zeros((256, 256))}
     byte_data = save(tensors)
     ```
     """
-    serialized = serialize(_flatten(tensors), metadata=metadata)
+    serialized = serialize(_flatten(tensors), metadata=metadata, config=config)
     result = bytes(serialized)
     return result
 
@@ -277,6 +281,7 @@ def save_file(
     tensors: Dict[str, torch.Tensor],
     filename: Union[str, os.PathLike],
     metadata: Optional[Dict[str, str]] = None,
+    config: Optional[Dict[str, Any]] = None,
 ):
     """
     Saves a dictionary of tensors into raw bytes in safetensors format.
@@ -290,6 +295,8 @@ def save_file(
             Optional text only metadata you might want to save in your header.
             For instance it can be useful to specify more about the underlying
             tensors. This is purely informative and does not affect tensor loading.
+        config (`Dict[str, Any]`, *optional*, defaults to `None`):
+            Optional encryption configuration.
 
     Returns:
         `None`
@@ -297,14 +304,14 @@ def save_file(
     Example:
 
     ```python
-    from safetensors.torch import save_file
+    from cryptotensors.torch import save_file
     import torch
 
     tensors = {"embedding": torch.zeros((512, 1024)), "attention": torch.zeros((256, 256))}
     save_file(tensors, "model.safetensors")
     ```
     """
-    serialize_file(_flatten(tensors), filename, metadata=metadata)
+    serialize_file(_flatten(tensors), filename, metadata=metadata, config=config)
 
 
 def load_file(

@@ -1,5 +1,5 @@
 import os
-from typing import Dict, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 
@@ -8,7 +8,11 @@ from jax import Array
 from cryptotensors import numpy, safe_open
 
 
-def save(tensors: Dict[str, Array], metadata: Optional[Dict[str, str]] = None) -> bytes:
+def save(
+    tensors: Dict[str, Array],
+    metadata: Optional[Dict[str, str]] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> bytes:
     """
     Saves a dictionary of tensors into raw bytes in safetensors format.
 
@@ -19,6 +23,8 @@ def save(tensors: Dict[str, Array], metadata: Optional[Dict[str, str]] = None) -
             Optional text only metadata you might want to save in your header.
             For instance it can be useful to specify more about the underlying
             tensors. This is purely informative and does not affect tensor loading.
+        config (`Dict[str, Any]`, *optional*, defaults to `None`):
+            Optional encryption configuration.
 
     Returns:
         `bytes`: The raw bytes representing the format
@@ -26,7 +32,7 @@ def save(tensors: Dict[str, Array], metadata: Optional[Dict[str, str]] = None) -
     Example:
 
     ```python
-    from safetensors.flax import save
+    from cryptotensors.flax import save
     from jax import numpy as jnp
 
     tensors = {"embedding": jnp.zeros((512, 1024)), "attention": jnp.zeros((256, 256))}
@@ -34,13 +40,14 @@ def save(tensors: Dict[str, Array], metadata: Optional[Dict[str, str]] = None) -
     ```
     """
     np_tensors = _jnp2np(tensors)
-    return numpy.save(np_tensors, metadata=metadata)
+    return numpy.save(np_tensors, metadata=metadata, config=config)
 
 
 def save_file(
     tensors: Dict[str, Array],
     filename: Union[str, os.PathLike],
     metadata: Optional[Dict[str, str]] = None,
+    config: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Saves a dictionary of tensors into raw bytes in safetensors format.
@@ -54,6 +61,8 @@ def save_file(
             Optional text only metadata you might want to save in your header.
             For instance it can be useful to specify more about the underlying
             tensors. This is purely informative and does not affect tensor loading.
+        config (`Dict[str, Any]`, *optional*, defaults to `None`):
+            Optional encryption configuration.
 
     Returns:
         `None`
@@ -61,7 +70,7 @@ def save_file(
     Example:
 
     ```python
-    from safetensors.flax import save_file
+    from cryptotensors.flax import save_file
     from jax import numpy as jnp
 
     tensors = {"embedding": jnp.zeros((512, 1024)), "attention": jnp.zeros((256, 256))}
@@ -69,7 +78,7 @@ def save_file(
     ```
     """
     np_tensors = _jnp2np(tensors)
-    return numpy.save_file(np_tensors, filename, metadata=metadata)
+    return numpy.save_file(np_tensors, filename, metadata=metadata, config=config)
 
 
 def load(data: bytes) -> Dict[str, Array]:

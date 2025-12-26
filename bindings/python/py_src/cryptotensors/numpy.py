@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Dict, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 
@@ -14,7 +14,9 @@ def _tobytes(tensor: np.ndarray) -> bytes:
 
 
 def save(
-    tensor_dict: Dict[str, np.ndarray], metadata: Optional[Dict[str, str]] = None
+    tensor_dict: Dict[str, np.ndarray],
+    metadata: Optional[Dict[str, str]] = None,
+    config: Optional[Dict[str, Any]] = None,
 ) -> bytes:
     """
     Saves a dictionary of tensors into raw bytes in safetensors format.
@@ -26,6 +28,8 @@ def save(
             Optional text only metadata you might want to save in your header.
             For instance it can be useful to specify more about the underlying
             tensors. This is purely informative and does not affect tensor loading.
+        config (`Dict[str, Any]`, *optional*, defaults to `None`):
+            Optional encryption configuration.
 
     Returns:
         `bytes`: The raw bytes representing the format
@@ -33,7 +37,7 @@ def save(
     Example:
 
     ```python
-    from safetensors.numpy import save
+    from cryptotensors.numpy import save
     import numpy as np
 
     tensors = {"embedding": np.zeros((512, 1024)), "attention": np.zeros((256, 256))}
@@ -44,7 +48,7 @@ def save(
         k: {"dtype": v.dtype.name, "shape": v.shape, "data": _tobytes(v)}
         for k, v in tensor_dict.items()
     }
-    serialized = serialize(flattened, metadata=metadata)
+    serialized = serialize(flattened, metadata=metadata, config=config)
     result = bytes(serialized)
     return result
 
@@ -53,6 +57,7 @@ def save_file(
     tensor_dict: Dict[str, np.ndarray],
     filename: Union[str, os.PathLike],
     metadata: Optional[Dict[str, str]] = None,
+    config: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Saves a dictionary of tensors into raw bytes in safetensors format.
@@ -66,6 +71,8 @@ def save_file(
             Optional text only metadata you might want to save in your header.
             For instance it can be useful to specify more about the underlying
             tensors. This is purely informative and does not affect tensor loading.
+        config (`Dict[str, Any]`, *optional*, defaults to `None`):
+            Optional encryption configuration.
 
     Returns:
         `None`
@@ -73,7 +80,7 @@ def save_file(
     Example:
 
     ```python
-    from safetensors.numpy import save_file
+    from cryptotensors.numpy import save_file
     import numpy as np
 
     tensors = {"embedding": np.zeros((512, 1024)), "attention": np.zeros((256, 256))}
@@ -84,7 +91,7 @@ def save_file(
         k: {"dtype": v.dtype.name, "shape": v.shape, "data": _tobytes(v)}
         for k, v in tensor_dict.items()
     }
-    serialize_file(flattened, filename, metadata=metadata)
+    serialize_file(flattened, filename, metadata=metadata, config=config)
 
 
 def load(data: bytes) -> Dict[str, np.ndarray]:

@@ -575,6 +575,7 @@ impl<'py> IntoPyObject<'py> for Device {
     }
 }
 
+#[allow(clippy::enum_variant_names)]
 enum Storage {
     Mmap(Mmap),
     /// Torch specific mmap
@@ -730,10 +731,7 @@ impl Open {
                         gil_storage.get_or_init_py_attached(py, || storage);
 
                         // MODIFIED: Keep raw mmap for crypto operations
-                        let raw_mmap = match crypto {
-                            Some(_) => Some(Arc::new(Storage::Mmap(buffer))),
-                            None => None,
-                        };
+                        let raw_mmap = crypto.as_ref().map(|_| Arc::new(Storage::Mmap(buffer)));
 
                         Ok((Storage::PaddleStorage(gil_storage), raw_mmap))
                     } else {
@@ -790,10 +788,7 @@ impl Open {
                         gil_storage.get_or_init_py_attached(py, || storage);
 
                         // MODIFIED: Keep raw mmap for crypto operations
-                        let raw_mmap = match crypto {
-                            Some(_) => Some(Arc::new(Storage::Mmap(buffer))),
-                            None => None,
-                        };
+                        let raw_mmap = crypto.as_ref().map(|_| Arc::new(Storage::Mmap(buffer)));
 
                         Ok((Storage::TorchStorage(gil_storage), raw_mmap))
                     } else {
@@ -961,7 +956,7 @@ impl Open {
                             let decrypted = crypto.silent_decrypt(name, data).map_err(|e| {
                                 SafetensorError::new_err(format!("Decryption failed: {e:?}"))
                             })?;
-                            PyByteArray::new(py, &decrypted).into_any().into()
+                            PyByteArray::new(py, decrypted).into_any().into()
                         };
                         // Encrypted path: use paddle.to_tensor() for decrypted bytes
                         paddle
@@ -1077,7 +1072,7 @@ impl Open {
                                 let decrypted = crypto.silent_decrypt(name, data).map_err(|e| {
                                     SafetensorError::new_err(format!("Decryption failed: {e:?}"))
                                 })?;
-                                PyByteArray::new(py, &decrypted).into_any().into()
+                                PyByteArray::new(py, decrypted).into_any().into()
                             }
                         } else {
                             storage_slice.into()
@@ -1499,7 +1494,7 @@ impl PySafeSlice {
                         let decrypted = crypto.silent_decrypt(&self.name, data).map_err(|e| {
                             SafetensorError::new_err(format!("Decryption failed: {e:?}"))
                         })?;
-                        PyByteArray::new(py, &decrypted).into_any().into()
+                        PyByteArray::new(py, decrypted).into_any().into()
                     }
                 } else {
                     storage_slice.into()
@@ -1616,7 +1611,7 @@ impl PySafeSlice {
                         let decrypted = crypto.silent_decrypt(&self.name, data).map_err(|e| {
                             SafetensorError::new_err(format!("Decryption failed: {e:?}"))
                         })?;
-                        PyByteArray::new(py, &decrypted).into_any().into()
+                        PyByteArray::new(py, decrypted).into_any().into()
                     };
                     // Encrypted path: use paddle.to_tensor() for decrypted bytes
                     paddle

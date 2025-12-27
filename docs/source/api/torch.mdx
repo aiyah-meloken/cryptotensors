@@ -6,3 +6,71 @@
 [[autodoc]] safetensors.torch.save
 [[autodoc]] safetensors.torch.load_model
 [[autodoc]] safetensors.torch.save_model
+
+## Encryption Support
+
+CryptoTensors extends the Torch API with optional encryption support via the `config` parameter in `save_file` and `save` functions.
+
+### Encryption Configuration
+
+The `config` parameter accepts a dictionary with the following structure:
+
+```python
+config = {
+    "enc_key": {
+        "kty": "oct",
+        "alg": "aes256gcm",  # or "aes128gcm", "chacha20poly1305"
+        "k": "<base64-encoded-key>",
+        "kid": "encryption-key-id"
+    },
+    "sign_key": {
+        "kty": "okp",
+        "alg": "ed25519",
+        "d": "<base64-encoded-private-key>",
+        "x": "<base64-encoded-public-key>",
+        "kid": "signing-key-id"
+    },
+    "tensors": ["tensor1", "tensor2"],  # Optional: list of tensor names to encrypt
+    "policy": {  # Optional: access policy
+        "local": "<rego-policy-code>",
+        "remote": "<policy-url>"
+    }
+}
+```
+
+### Example Usage
+
+```python
+import torch
+from cryptotensors.torch import save_file, load_file
+
+tensors = {
+    "weight": torch.zeros((100, 100)),
+    "bias": torch.zeros((100,))
+}
+
+# Save with encryption
+config = {
+    "enc_key": enc_key,
+    "sign_key": sign_key,
+}
+save_file(tensors, "model.cryptotensors", config=config)
+
+# Load encrypted file (keys retrieved from key provider)
+tensors = load_file("model.cryptotensors")
+```
+
+### Partial Encryption
+
+To encrypt only specific tensors:
+
+```python
+config = {
+    "enc_key": enc_key,
+    "sign_key": sign_key,
+    "tensors": ["weight"],  # Only encrypt "weight", leave "bias" in plaintext
+}
+save_file(tensors, "model.cryptotensors", config=config)
+```
+
+For more details on encryption, key management, and usage examples, see the [CryptoTensors documentation](../crypto/encryption).

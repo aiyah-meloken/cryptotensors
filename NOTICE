@@ -34,6 +34,17 @@ The following files have been MODIFIED from the original safetensors project:
    - Renamed package to cryptotensors
    - Updated dependencies for encryption support
 
+6. README.md
+   - Added CryptoTensors introduction and features
+   - Added citation to the research paper: "CryptoTensors: A Light-Weight Large 
+     Language Model File Format for Highly-Secure Model Distribution" (Zhu et al., 2025)
+   - Added usage examples for encryption and signing
+
+7. docs/source/index.mdx
+   - Added CryptoTensors Extension section
+   - Added research foundation citation
+   - Documented CryptoTensors features and capabilities
+
 ================================================================================
 NEW FILES ADDED (not present in original safetensors)
 ================================================================================

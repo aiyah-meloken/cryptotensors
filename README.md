@@ -1,39 +1,43 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/datasets/safetensors/assets/raw/main/banner-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://huggingface.co/datasets/safetensors/assets/raw/main/banner-light.svg">
-    <img alt="Hugging Face Safetensors Library" src="https://huggingface.co/datasets/safetensors/assets/raw/main/banner-light.svg" style="max-width: 100%;">
-  </picture>
-  <br/>
-  <br/>
-</p>
 
-Python
-[![Pypi](https://img.shields.io/pypi/v/safetensors.svg)](https://pypi.org/pypi/safetensors/)
-[![Documentation](https://img.shields.io/website/http/huggingface.co/docs/safetensors/index.svg?label=docs)](https://huggingface.co/docs/safetensors/index)
-[![Codecov](https://codecov.io/github/huggingface/safetensors/coverage.svg?branch=main)](https://codecov.io/gh/huggingface/safetensors)
-[![Downloads](https://static.pepy.tech/badge/safetensors/month)](https://pepy.tech/project/safetensors)
+# CryptoTensors
 
-Rust
-[![Crates.io](https://img.shields.io/crates/v/safetensors.svg)](https://crates.io/crates/safetensors)
-[![Documentation](https://docs.rs/safetensors/badge.svg)](https://docs.rs/safetensors/)
-[![Codecov](https://codecov.io/github/huggingface/safetensors/coverage.svg?branch=main)](https://codecov.io/gh/huggingface/safetensors)
-[![Dependency status](https://deps.rs/repo/github/huggingface/safetensors/status.svg?path=safetensors)](https://deps.rs/repo/github/huggingface/safetensors?path=safetensors)
+## About
 
-# safetensors
+This repository implements **CryptoTensors**, a secure tensor file format based on the ideas presented in the research paper "CryptoTensors: A Light-Weight Large Language Model File Format for Highly-Secure Model Distribution" (Zhu et al., 2025). This implementation extends [safetensors](https://github.com/huggingface/safetensors) with encryption, signing, and access control capabilities while maintaining full backward compatibility with safetensors.
+
+**CryptoTensors** provides:
+- 🔐 **Encryption**: AES-GCM and ChaCha20-Poly1305 encryption for tensor data
+- ✍️ **Signing**: Ed25519 signature verification for file integrity  
+- 🔑 **Key Management**: Flexible key provider system (environment variables, files, programmatic)
+- 🛡️ **Access Policy**: Rego-based policy engine for fine-grained access control
+- 🔄 **Transparent Integration**: Works seamlessly with transformers, vLLM, and other ML frameworks
+
+This project is a derivative work based on safetensors by Hugging Face. See [NOTICE](NOTICE) for details.
+
+### Citation
+
+This implementation is based on the following research paper:
+
+> Zhu, H., Li, S., Li, Q., & Jin, Y. (2025). CryptoTensors: A Light-Weight Large Language Model File Format for Highly-Secure Model Distribution. arXiv:2512.04580. [https://arxiv.org/pdf/2512.04580](https://arxiv.org/pdf/2512.04580)
 
 ## Safetensors
 
-This repository implements a new simple format for storing tensors
+Safetensors is a new simple format for storing tensors
 safely (as opposed to pickle) and that is still fast (zero-copy).
 
 ### Installation
 #### Pip
 
-You can install safetensors via the pip manager:
+You can install cryptotensors via the pip manager:
 
 ```bash
-pip install safetensors
+pip install cryptotensors
+```
+
+For backward compatibility, you can also install the `safetensors` adapter package:
+
+```bash
+pip install safetensors  # This installs cryptotensors under the safetensors namespace
 ```
 
 #### From source
@@ -45,18 +49,20 @@ For the sources, you need Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # Make sure it's up to date and using stable channel
 rustup update
-git clone https://github.com/huggingface/safetensors
-cd safetensors/bindings/python
+git clone <repository-url>
+cd open-cryptotensors/bindings/python
 pip install setuptools_rust
 pip install -e .
 ```
 
 ### Getting started
 
+#### Basic Usage (Safetensors Compatible)
+
 ```python
 import torch
-from safetensors import safe_open
-from safetensors.torch import save_file
+from cryptotensors import safe_open
+from cryptotensors.torch import save_file
 
 tensors = {
    "weight1": torch.zeros((1024, 1024)),
@@ -70,7 +76,31 @@ with safe_open("model.safetensors", framework="pt", device="cpu") as f:
        tensors[key] = f.get_tensor(key)
 ```
 
-[Python documentation](https://huggingface.co/docs/safetensors/index)
+#### Encryption Usage (CryptoTensors)
+
+```python
+import torch
+from cryptotensors.torch import save_file, load_file
+
+tensors = {
+   "weight1": torch.zeros((1024, 1024)),
+   "weight2": torch.zeros((1024, 1024))
+}
+
+# Encrypt and save
+config = {
+    "enc_key": enc_key,    # JWK format encryption key
+    "sign_key": sign_key,  # JWK format signing key
+}
+save_file(tensors, "model.cryptotensors", config=config)
+
+# Load encrypted file (keys retrieved from key provider)
+tensors = load_file("model.cryptotensors")
+```
+
+See the [documentation](https://your-username.github.io/open-cryptotensors/) for detailed guides on encryption, key management, and integration examples.
+
+**Note**: CryptoTensors is fully backward compatible with safetensors. You can use `cryptotensors` as a drop-in replacement for `safetensors` in most cases.
 
 
 ### Format

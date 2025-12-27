@@ -5,9 +5,27 @@
     <img class="hidden dark:block" src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/safetensors/safetensors-logo-dark.svg"/>
 </div>
 
-# Safetensors
+# Safetensors & CryptoTensors
 
 Safetensors is a new simple format for storing tensors safely (as opposed to pickle) and that is still fast (zero-copy). Safetensors is really [fast 🚀](./speed).
+
+## CryptoTensors Extension
+
+This project implements **CryptoTensors**, a secure tensor file format based on the ideas presented in the research paper "CryptoTensors: A Light-Weight Large Language Model File Format for Highly-Secure Model Distribution" (Zhu et al., 2025). This implementation extends safetensors with encryption, signing, and access control capabilities while maintaining full backward compatibility with safetensors. CryptoTensors provides:
+
+- **Encryption**: AES-GCM and ChaCha20-Poly1305 encryption for tensor data
+- **Signing**: Ed25519 signature verification for file integrity
+- **Key Management**: Flexible key provider system (environment variables, files, programmatic)
+- **Access Policy**: Rego-based policy engine for fine-grained access control
+- **Transparent Integration**: Works seamlessly with transformers, vLLM, and other ML frameworks
+
+Learn more about CryptoTensors features in the [CryptoTensors section](./crypto/encryption).
+
+### Research Foundation
+
+This implementation is based on the following research paper:
+
+> Zhu, H., Li, S., Li, Q., & Jin, Y. (2025). CryptoTensors: A Light-Weight Large Language Model File Format for Highly-Secure Model Distribution. arXiv:2512.04580. [https://arxiv.org/pdf/2512.04580](https://arxiv.org/pdf/2512.04580)
 
 ## Installation
 

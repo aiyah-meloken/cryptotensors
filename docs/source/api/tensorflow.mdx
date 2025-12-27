@@ -4,3 +4,54 @@
 [[autodoc]] safetensors.tensorflow.load
 [[autodoc]] safetensors.tensorflow.save_file
 [[autodoc]] safetensors.tensorflow.save
+
+## Encryption Support
+
+CryptoTensors extends the TensorFlow API with optional encryption support via the `config` parameter in `save_file` and `save` functions.
+
+### Encryption Configuration
+
+The `config` parameter accepts a dictionary with encryption keys and optional settings:
+
+```python
+config = {
+    "enc_key": {
+        "kty": "oct",
+        "alg": "aes256gcm",
+        "k": "<base64-encoded-key>",
+        "kid": "encryption-key-id"
+    },
+    "sign_key": {
+        "kty": "okp",
+        "alg": "ed25519",
+        "d": "<base64-encoded-private-key>",
+        "x": "<base64-encoded-public-key>",
+        "kid": "signing-key-id"
+    },
+    "tensors": ["tensor1", "tensor2"],  # Optional: list of tensor names to encrypt
+}
+```
+
+### Example Usage
+
+```python
+import tensorflow as tf
+from cryptotensors.tensorflow import save_file, load_file
+
+tensors = {
+    "weight": tf.zeros((100, 100)),
+    "bias": tf.zeros((100,))
+}
+
+# Save with encryption
+config = {
+    "enc_key": enc_key,
+    "sign_key": sign_key,
+}
+save_file(tensors, "model.cryptotensors", config=config)
+
+# Load encrypted file
+tensors = load_file("model.cryptotensors")
+```
+
+For more details on encryption and key management, see the [CryptoTensors documentation](../crypto/encryption).

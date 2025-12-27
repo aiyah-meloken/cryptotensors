@@ -1,0 +1,192 @@
+# Signing & Verification
+
+CryptoTensors includes Ed25519 signature support to ensure file integrity and authenticity. Every encrypted file is automatically signed, and signatures are verified during decryption.
+
+## Overview
+
+When you save an encrypted tensor file, CryptoTensors:
+
+1. Encrypts the tensor data using your encryption key
+2. Signs the file header and metadata using your signing key
+3. Embeds the signature in the file metadata
+
+When you load an encrypted file, CryptoTensors:
+
+1. Verifies the signature using the public key from your key provider
+2. Decrypts the tensor data if signature verification succeeds
+3. Raises an error if signature verification fails
+
+## How It Works
+
+### Signature Algorithm
+
+CryptoTensors uses **Ed25519**, a modern, high-performance digital signature algorithm that provides:
+
+- **Fast signing and verification**: Optimized for performance
+- **Small signatures**: 64 bytes per signature
+- **Strong security**: Based on the Ed25519 elliptic curve
+- **Deterministic**: Same input always produces the same signature
+
+### What Gets Signed
+
+The signature covers:
+
+- File header metadata
+- Encryption configuration
+- Tensor metadata (names, shapes, data offsets)
+- Access policy (if present)
+
+This ensures that any tampering with the file structure or metadata will be detected.
+
+## Usage
+
+Signing is automatic when you provide a signing key in your encryption configuration:
+
+```python
+import torch
+from cryptotensors.torch import save_file
+
+tensors = {"weight": torch.zeros((100, 100))}
+
+config = {
+    "enc_key": enc_key,      # Encryption key
+    "sign_key": sign_key,    # Signing key (required for encrypted files)
+}
+
+# File is automatically signed during save
+save_file(tensors, "model.cryptotensors", config=config)
+```
+
+### Signature Verification
+
+Verification happens automatically when loading:
+
+```python
+from cryptotensors.torch import load_file
+
+# Signature is verified automatically
+# If verification fails, an error is raised
+tensors = load_file("model.cryptotensors")
+```
+
+If the signature is invalid or the signing key is not available, loading will fail with a clear error message.
+
+## Signing Key Format
+
+Signing keys use Ed25519 in JWK format:
+
+```json
+{
+  "kty": "okp",
+  "alg": "ed25519",
+  "d": "<base64-encoded-private-key>",
+  "x": "<base64-encoded-public-key>",
+  "kid": "my-signing-key"
+}
+```
+
+- `kty`: Must be `"okp"` (Octet Key Pair) for Ed25519
+- `alg`: Must be `"ed25519"`
+- `d`: Private key (32 bytes, base64-encoded)
+- `x`: Public key (32 bytes, base64-encoded)
+- `kid`: Key identifier (optional but recommended)
+
+## Generating Signing Keys
+
+### Using Python's cryptography library:
+
+```python
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
+import base64
+
+# Generate key pair
+private_key = ed25519.Ed25519PrivateKey.generate()
+public_key = private_key.public_key()
+
+# Serialize to raw bytes
+private_bytes = private_key.private_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PrivateFormat.Raw,
+    encryption_algorithm=serialization.NoEncryption(),
+)
+public_bytes = public_key.public_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PublicFormat.Raw,
+)
+
+# Create JWK format
+sign_key = {
+    "kty": "okp",
+    "alg": "ed25519",
+    "kid": "my-sign-key",
+    "d": base64.b64encode(private_bytes).decode("ascii"),
+    "x": base64.b64encode(public_bytes).decode("ascii"),
+}
+```
+
+## Security Considerations
+
+### Key Management
+
+1. **Private Key Security**: The private key (`d`) must be kept secret. Never share it or commit it to version control.
+
+2. **Public Key Distribution**: The public key (`x`) can be shared freely. It's used for verification and doesn't allow signing.
+
+3. **Key Storage**: Store signing keys securely:
+   - Use environment variables for development
+   - Use secure key management systems (KMS) for production
+   - Consider using hardware security modules (HSM) for high-security deployments
+
+### Signature Verification
+
+1. **Always Verify**: CryptoTensors automatically verifies signatures on load. Never disable this verification.
+
+2. **Key Rotation**: When rotating signing keys:
+   - Generate new key pairs
+   - Update key providers with new keys
+   - Re-sign existing files if needed (or maintain old keys for verification)
+
+3. **Multiple Keys**: The key provider system supports multiple keys, allowing you to verify files signed with different keys.
+
+### Best Practices
+
+1. **Separate Keys**: Use different signing keys for different environments (development, staging, production).
+
+2. **Key IDs**: Always include `kid` (key identifier) to help identify which key was used for signing.
+
+3. **Key Backup**: Securely backup your private keys. Loss of the private key means you cannot re-sign files, though existing signatures remain valid.
+
+4. **Audit Logging**: Log signature verification results in production to detect potential security issues.
+
+## Error Handling
+
+When signature verification fails, you'll see an error like:
+
+```
+CryptoTensorsError: Signature verification failed: invalid signature
+```
+
+Common causes:
+
+- **Wrong key**: The signing key in your key provider doesn't match the one used to sign the file
+- **File tampering**: The file has been modified after signing
+- **Missing key**: No signing key is available in your key providers
+
+To resolve:
+
+1. Verify you're using the correct signing key
+2. Check that the file hasn't been corrupted or modified
+3. Ensure your key provider is properly configured (see [Key Management](./key_management))
+
+## Integration with Encryption
+
+Signing and encryption work together:
+
+- **Encrypted files are always signed**: You must provide both `enc_key` and `sign_key` when saving encrypted files
+- **Signature verification happens before decryption**: Invalid signatures prevent decryption, protecting against tampered files
+- **Unencrypted files**: Plain safetensors files (without encryption) don't require signatures
+
+This two-layer security (encryption + signing) provides both confidentiality and integrity protection for your tensor data.
+
+

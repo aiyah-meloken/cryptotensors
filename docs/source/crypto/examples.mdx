@@ -1,0 +1,382 @@
+# Integration Examples
+
+CryptoTensors is designed to work seamlessly with existing ML frameworks and tools. This guide shows how to integrate CryptoTensors with popular frameworks like transformers and vLLM.
+
+## Transformers Integration
+
+CryptoTensors is fully compatible with Hugging Face Transformers. You can use encrypted models without modifying your transformers code.
+
+### Basic Usage
+
+1. **Convert your model to CryptoTensors format** (see conversion examples below)
+
+2. **Set up key provider** via environment variable:
+
+```bash
+export CRYPTOTENSOR_KEY_JKU="file://./key.jwk"
+```
+
+3. **Use transformers as usual**:
+
+```python
+from transformers import pipeline
+
+# Load encrypted model - no code changes needed!
+model = "./path/to/encrypted-model"
+pipe = pipeline("text-generation", model=model)
+
+messages = [{"role": "user", "content": "Hello!"}]
+result = pipe(messages, max_new_tokens=50)
+print(result)
+```
+
+Transformers will automatically use CryptoTensors when it detects encrypted `.safetensors` files, as long as the key is available via the key provider.
+
+### Converting Models
+
+Convert a Hugging Face model to CryptoTensors:
+
+```python
+from cryptotensors.torch import load_file, save_file
+import os
+
+# Load original model
+model_path = "./Qwen/Qwen3-0.6B/model.safetensors"
+model = load_file(model_path)
+
+# Prepare encryption config
+enc_key = {
+    "kty": "oct",
+    "alg": "aes256gcm",
+    "k": "L+xl38kCEteXk+6Tm1mzu5JvFriVibzAsgpYX2WmAgA=",
+    "kid": "enc-key",
+}
+
+sign_key = {
+    "kty": "okp",
+    "alg": "ed25519",
+    "d": "uTKTjQL6pX1Tqb7Hpor4A1s+TdgHReQEITZWWAf7DIc=",
+    "x": "xkqFcGjXCBMk75q0259N1ggRJsqc+FTAiXMuKX72fd8=",
+    "kid": "sign-key",
+}
+
+config = {
+    "enc_key": enc_key,
+    "sign_key": sign_key,
+    # Optionally encrypt only specific tensors
+    # "tensors": ["embedding", "attention"],
+}
+
+metadata = {
+    "format": "pt"  # Required by transformers
+}
+
+# Save encrypted model
+output_path = "./Qwen/Qwen3-0.6B-Enc/model.safetensors"
+os.makedirs(os.path.dirname(output_path), exist_ok=True)
+save_file(model, output_path, config=config, metadata=metadata)
+
+print(f"Encrypted model saved to {output_path}")
+```
+
+### Partial Encryption
+
+You can encrypt only specific tensors to balance security and performance:
+
+```python
+import random
+
+# Load model
+model = load_file("model.safetensors")
+
+# Select tensors to encrypt (e.g., top 10 largest)
+tensor_sizes = {name: sum(model[name].shape) for name in model.keys()}
+largest_tensors = sorted(tensor_sizes.items(), key=lambda x: x[1], reverse=True)[:10]
+tensors_to_encrypt = [name for name, _ in largest_tensors]
+
+config = {
+    "enc_key": enc_key,
+    "sign_key": sign_key,
+    "tensors": tensors_to_encrypt,  # Only encrypt selected tensors
+}
+
+save_file(model, "model-partially-encrypted.cryptotensors", config=config)
+```
+
+## vLLM Integration
+
+vLLM supports CryptoTensors out of the box. Set up your key provider and use encrypted models normally.
+
+### Basic Usage
+
+```python
+from vllm import LLM, SamplingParams
+import os
+
+# Set up key provider
+os.environ["CRYPTOTENSOR_KEY_JKU"] = "file://./key.jwk"
+
+# Use encrypted model - no code changes!
+llm = LLM(model="./path/to/encrypted-model")
+
+sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
+prompts = ["Hello, my name is", "The capital of France is"]
+
+outputs = llm.generate(prompts, sampling_params)
+
+for output in outputs:
+    print(f"Prompt: {output.prompt!r}")
+    print(f"Generated: {output.outputs[0].text!r}")
+```
+
+### Docker Deployment
+
+Create a Dockerfile that includes CryptoTensors:
+
+```dockerfile
+FROM vllm/vllm-openai:latest
+
+# Install CryptoTensors
+RUN pip install cryptotensors
+
+# Copy your key file (or use secrets management)
+COPY key.jwk /app/key.jwk
+
+# Set environment variable
+ENV CRYPTOTENSOR_KEY_JKU=file:///app/key.jwk
+
+# Your application code
+COPY app.py /app/
+WORKDIR /app
+CMD ["python", "app.py"]
+```
+
+**Security Note**: In production, use Docker secrets or mounted volumes with restricted permissions instead of copying keys into the image.
+
+### Kubernetes Deployment
+
+Use Kubernetes secrets for key management:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cryptotensors-keys
+type: Opaque
+stringData:
+  key.jwk: |
+    {
+      "keys": [
+        {
+          "kty": "oct",
+          "alg": "aes256gcm",
+          "k": "...",
+          "kid": "enc-key"
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-server
+spec:
+  template:
+    spec:
+      containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest
+        env:
+        - name: CRYPTOTENSOR_KEY_JKU
+          value: "file:///secrets/key.jwk"
+        volumeMounts:
+        - name: keys
+          mountPath: /secrets
+          readOnly: true
+      volumes:
+      - name: keys
+        secret:
+          secretName: cryptotensors-keys
+```
+
+## Python Scripts
+
+For custom Python scripts, use the key provider system:
+
+```python
+import os
+import cryptotensors
+from cryptotensors.torch import load_file, save_file
+
+# Option 1: Environment variable
+os.environ["CRYPTOTENSOR_KEY_JKU"] = "file://./key.jwk"
+
+# Option 2: Programmatic registration
+with open("key.jwk", "r") as f:
+    import json
+    keys = json.load(f)
+    cryptotensors.register_key_provider(keys=keys["keys"])
+
+# Use encrypted files
+tensors = load_file("model.cryptotensors")
+```
+
+## Batch Conversion Script
+
+Convert multiple models:
+
+```python
+import os
+from pathlib import Path
+from cryptotensors.torch import load_file, save_file
+
+def convert_model(input_path, output_path, config):
+    """Convert a safetensors model to cryptotensors format."""
+    print(f"Loading {input_path}...")
+    model = load_file(input_path)
+    
+    print(f"Encrypting {len(model)} tensors...")
+    save_file(model, output_path, config=config)
+    
+    print(f"Saved encrypted model to {output_path}")
+
+# Configuration
+config = {
+    "enc_key": enc_key,
+    "sign_key": sign_key,
+}
+
+# Convert all models in a directory
+input_dir = Path("./models/original")
+output_dir = Path("./models/encrypted")
+output_dir.mkdir(parents=True, exist_ok=True)
+
+for model_file in input_dir.glob("*.safetensors"):
+    output_file = output_dir / model_file.name
+    convert_model(model_file, output_file, config)
+```
+
+## Key Generation Script
+
+Generate keys for your deployment:
+
+```python
+import json
+import secrets
+import base64
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
+
+def generate_keys(output_path="key.jwk"):
+    """Generate encryption and signing keys."""
+    # Generate encryption key
+    enc_key_bytes = secrets.token_bytes(32)  # 32 bytes for AES-256-GCM
+    enc_key = {
+        "kty": "oct",
+        "alg": "aes256gcm",
+        "kid": "enc-key",
+        "k": base64.b64encode(enc_key_bytes).decode("ascii"),
+    }
+    
+    # Generate signing key pair
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    public_key = private_key.public_key()
+    
+    private_bytes = private_key.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_bytes = public_key.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    
+    sign_key = {
+        "kty": "okp",
+        "alg": "ed25519",
+        "kid": "sign-key",
+        "d": base64.b64encode(private_bytes).decode("ascii"),
+        "x": base64.b64encode(public_bytes).decode("ascii"),
+    }
+    
+    # Save to JWK file
+    keys = {"keys": [enc_key, sign_key]}
+    with open(output_path, "w") as f:
+        json.dump(keys, f, indent=2)
+    
+    print(f"Keys saved to {output_path}")
+    return keys
+
+if __name__ == "__main__":
+    generate_keys()
+```
+
+## Complete Workflow Example
+
+End-to-end example:
+
+```python
+# 1. Generate keys
+from write_jwk import generate_keys
+keys = generate_keys("key.jwk")
+
+# 2. Load keys
+import json
+with open("key.jwk", "r") as f:
+    jwk = json.load(f)
+    enc_key = jwk["keys"][0]
+    sign_key = jwk["keys"][1]
+
+# 3. Convert model
+from cryptotensors.torch import load_file, save_file
+
+model = load_file("original-model.safetensors")
+config = {
+    "enc_key": enc_key,
+    "sign_key": sign_key,
+}
+save_file(model, "encrypted-model.cryptotensors", config=config)
+
+# 4. Use with transformers
+import os
+os.environ["CRYPTOTENSOR_KEY_JKU"] = "file://./key.jwk"
+
+from transformers import pipeline
+pipe = pipeline("text-generation", model="./encrypted-model")
+result = pipe("Hello, world!")
+```
+
+## Troubleshooting
+
+### Key Not Found
+
+If you see "No suitable key found":
+
+1. Check environment variable is set: `echo $CRYPTOTENSOR_KEY_JKU`
+2. Verify key file exists and is readable
+3. Check key IDs match between file and keys
+
+### Framework Compatibility
+
+CryptoTensors works with:
+- ✅ Hugging Face Transformers
+- ✅ vLLM
+- ✅ Direct PyTorch/TensorFlow usage
+- ✅ Any framework that uses safetensors
+
+### Performance
+
+Encryption/decryption overhead:
+- **Encryption**: ~5-10% overhead during save
+- **Decryption**: Transparent, minimal overhead during load
+- **Partial encryption**: Reduces overhead by encrypting only selected tensors
+
+## See Also
+
+- [Encryption & Decryption](./encryption) - Core encryption features
+- [Key Management](./key_management) - Key provider system
+- [Signing & Verification](./signing) - File integrity
+- [Access Policy](./policy) - Fine-grained access control
+
+

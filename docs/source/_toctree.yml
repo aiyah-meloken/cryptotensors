@@ -22,3 +22,15 @@
   - local: api/numpy
     title: Numpy API
   title: API
+- sections:
+  - local: crypto/encryption
+    title: Encryption & Decryption
+  - local: crypto/signing
+    title: Signing & Verification
+  - local: crypto/key_management
+    title: Key Management
+  - local: crypto/policy
+    title: Access Policy
+  - local: crypto/examples
+    title: Integration Examples
+  title: CryptoTensors

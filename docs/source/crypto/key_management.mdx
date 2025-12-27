@@ -1,0 +1,279 @@
+# Key Management
+
+CryptoTensors provides a flexible key provider system that allows you to manage encryption and signing keys through multiple mechanisms. This enables secure key handling in different environments without modifying your application code.
+
+## Key Provider System
+
+The key provider system uses a registry pattern where multiple key providers can be registered with different priorities. When loading an encrypted file, CryptoTensors searches through registered providers in priority order until it finds a suitable key.
+
+### Provider Types
+
+CryptoTensors supports three built-in provider types:
+
+1. **Environment Variable Provider** (`env`): Reads keys from environment variables
+2. **File Provider** (`file`): Loads keys from JWK files specified via environment variables
+3. **Temporary Provider** (`temp`): Programmatically registered keys (for testing/development)
+
+## Environment Variable Provider
+
+The environment variable provider reads keys from the `CRYPTOTENSOR_KEYS` environment variable.
+
+### Setup
+
+Set the environment variable with a JSON-encoded key set:
+
+```bash
+export CRYPTOTENSOR_KEYS='{"keys": [{"kty": "oct", "alg": "aes256gcm", "k": "...", "kid": "enc-key"}, {"kty": "okp", "alg": "ed25519", "d": "...", "x": "...", "kid": "sign-key"}]}'
+```
+
+### Usage in Python
+
+```python
+import os
+import json
+
+# Set environment variable
+keys = {
+    "keys": [
+        enc_key,  # Your encryption key
+        sign_key  # Your signing key
+    ]
+}
+os.environ["CRYPTOTENSOR_KEYS"] = json.dumps(keys)
+
+# Now you can load encrypted files without specifying keys
+from cryptotensors.torch import load_file
+tensors = load_file("model.cryptotensors")
+```
+
+### When to Use
+
+- **Development**: Quick setup for local development
+- **Docker containers**: Pass keys via environment variables
+- **CI/CD pipelines**: Inject keys as build-time secrets
+- **Kubernetes**: Use secrets mounted as environment variables
+
+## File Provider
+
+The file provider loads keys from a JWK file specified via the `CRYPTOTENSOR_KEY_JKU` environment variable.
+
+### Setup
+
+1. Create a JWK file with your keys:
+
+```json
+{
+  "keys": [
+    {
+      "kty": "oct",
+      "alg": "aes256gcm",
+      "k": "L+xl38kCEteXk+6Tm1mzu5JvFriVibzAsgpYX2WmAgA=",
+      "kid": "enc-key"
+    },
+    {
+      "kty": "okp",
+      "alg": "ed25519",
+      "d": "uTKTjQL6pX1Tqb7Hpor4A1s+TdgHReQEITZWWAf7DIc=",
+      "x": "xkqFcGjXCBMk75q0259N1ggRJsqc+FTAiXMuKX72fd8=",
+      "kid": "sign-key"
+    }
+  ]
+}
+```
+
+2. Set the environment variable pointing to the file:
+
+```bash
+export CRYPTOTENSOR_KEY_JKU="file:///path/to/key.jwk"
+```
+
+Or use a relative path:
+
+```bash
+export CRYPTOTENSOR_KEY_JKU="file://./key.jwk"
+```
+
+### Usage
+
+```python
+import os
+
+# Set environment variable
+os.environ["CRYPTOTENSOR_KEY_JKU"] = "file://./key.jwk"
+
+# Load encrypted files
+from cryptotensors.torch import load_file
+tensors = load_file("model.cryptotensors")
+```
+
+### When to Use
+
+- **Production deployments**: Store keys in secure files with restricted permissions
+- **Shared keys**: Multiple processes can use the same key file
+- **Key rotation**: Easier to update keys by replacing the file
+
+## Temporary Provider (Programmatic Registration)
+
+For testing or programmatic use, you can register keys directly in code:
+
+```python
+import cryptotensors
+from cryptotensors.torch import load_file, save_file
+
+# Register keys
+cryptotensors.register_key_provider(
+    keys=[enc_key, sign_key]
+)
+
+# Use registered keys
+save_file(tensors, "model.cryptotensors", config=config)
+tensors = load_file("model.cryptotensors")
+
+# Clean up when done
+cryptotensors.disable_provider("temp")
+```
+
+### Registering from Files
+
+You can also register keys from a file:
+
+```python
+import json
+import cryptotensors
+
+# Load keys from file
+with open("key.jwk", "r") as f:
+    jwk_data = json.load(f)
+
+# Register all keys from the file
+cryptotensors.register_key_provider(files=["key.jwk"])
+
+# Or register specific keys
+cryptotensors.register_key_provider(keys=jwk_data["keys"])
+```
+
+### When to Use
+
+- **Testing**: Register keys in test setup
+- **Interactive use**: Jupyter notebooks, Python scripts
+- **Dynamic key loading**: When keys are fetched from external sources
+
+## Provider Priority
+
+Providers are checked in the following order (highest to lowest priority):
+
+1. **Temporary provider** (`temp`): Programmatically registered keys
+2. **File provider** (`file`): Keys from `CRYPTOTENSOR_KEY_JKU`
+3. **Environment provider** (`env`): Keys from `CRYPTOTENSOR_KEYS`
+
+The first provider that has a matching key (by `kid`) will be used.
+
+### Custom Priority
+
+You can register providers with custom priorities:
+
+```python
+cryptotensors.register_key_provider_with_priority(
+    keys=[enc_key, sign_key],
+    priority=100  # Higher priority = checked first
+)
+```
+
+## Managing Multiple Keys
+
+The key provider system supports multiple keys through the `kid` (key identifier) field:
+
+```python
+# Register multiple encryption keys
+enc_key_1 = {"kty": "oct", "alg": "aes256gcm", "k": "...", "kid": "enc-key-v1"}
+enc_key_2 = {"kty": "oct", "alg": "aes256gcm", "k": "...", "kid": "enc-key-v2"}
+
+cryptotensors.register_key_provider(keys=[enc_key_1, enc_key_2, sign_key])
+```
+
+When loading a file, CryptoTensors will:
+1. Read the `kid` from the file metadata
+2. Search providers for a key with matching `kid`
+3. Use the first matching key found
+
+This enables:
+- **Key rotation**: Keep old keys for decrypting existing files while using new keys for new files
+- **Multi-tenant**: Different keys for different models or users
+- **Key versioning**: Track which key was used for each file
+
+## Disabling Providers
+
+You can disable specific providers:
+
+```python
+# Disable environment provider
+cryptotensors.disable_provider("env")
+
+# Disable file provider
+cryptotensors.disable_provider("file")
+
+# Disable temporary provider
+cryptotensors.disable_provider("temp")
+```
+
+This is useful for:
+- **Testing**: Ensure specific providers are not used
+- **Security**: Disable less secure providers in production
+- **Debugging**: Isolate which provider is being used
+
+## Best Practices
+
+### Development
+
+```python
+# Use temporary provider for quick testing
+cryptotensors.register_key_provider(keys=[enc_key, sign_key])
+```
+
+### Production
+
+```bash
+# Use file provider with secure file permissions
+export CRYPTOTENSOR_KEY_JKU="file:///etc/cryptotensors/keys.jwk"
+chmod 600 /etc/cryptotensors/keys.jwk
+```
+
+### CI/CD
+
+```yaml
+# Use environment variables injected from secrets
+env:
+  CRYPTOTENSOR_KEYS: ${{ secrets.CRYPTOTENSOR_KEYS }}
+```
+
+### Security Recommendations
+
+1. **Never commit keys**: Use `.gitignore` for key files
+2. **Restrict file permissions**: `chmod 600` for key files
+3. **Use key management services**: Integrate with AWS KMS, HashiCorp Vault, etc.
+4. **Rotate keys regularly**: Plan for key rotation in your deployment
+5. **Audit key access**: Log when keys are used
+6. **Separate environments**: Use different keys for dev/staging/production
+
+## Error Handling
+
+If no suitable key is found, you'll see an error:
+
+```
+CryptoTensorsError: No suitable key found for kid: 'my-enc-key'
+```
+
+To resolve:
+1. Check that your key provider is properly configured
+2. Verify the `kid` in your key matches the `kid` in the file
+3. Ensure the provider is enabled (not disabled)
+4. Check provider priority if multiple providers are registered
+
+## Integration Examples
+
+See the [Integration Examples](./examples) guide for complete examples using key providers with:
+- Transformers library
+- vLLM
+- Docker deployments
+
+

@@ -1,0 +1,385 @@
+# Access Policy
+
+CryptoTensors includes an access policy engine based on Rego (Open Policy Agent) that allows you to define fine-grained access control rules for encrypted model files. Policies are evaluated during model loading to ensure only authorized deployments can decrypt and use the model.
+
+## Overview
+
+Access policies enable:
+
+- **Deployment validation**: Ensure models are only loaded in approved environments
+- **Framework attestation**: Verify the ML framework being used
+- **Time-based access**: Restrict access based on time windows
+- **Custom rules**: Define complex business logic for access control
+
+Policies are optional but recommended for production deployments where you need to control where and how encrypted models are used.
+
+## Policy Format
+
+Policies are written in Rego, a declarative policy language. They are stored in the encrypted file's metadata and evaluated during decryption.
+
+### Basic Policy Structure
+
+```rego
+package cryptotensors
+
+default allow = false
+
+allow {
+    # Your access rules here
+    input.framework == "pytorch"
+    input.environment == "production"
+}
+```
+
+### Policy Evaluation
+
+During model loading, CryptoTensors:
+
+1. Extracts the policy from the file metadata
+2. Evaluates the policy with context about the loading environment
+3. Allows decryption only if the policy evaluates to `allow = true`
+4. Raises an error if the policy denies access
+
+## Policy Context
+
+The policy receives an `input` object with information about the loading environment:
+
+```json
+{
+  "framework": "pytorch",
+  "framework_version": "2.0.0",
+  "environment": "production",
+  "timestamp": "2025-01-15T10:30:00Z",
+  "custom": {
+    "deployment_id": "deploy-123",
+    "region": "us-east-1"
+  }
+}
+```
+
+Available fields:
+- `framework`: ML framework name (e.g., "pytorch", "tensorflow")
+- `framework_version`: Framework version string
+- `environment`: Environment identifier (if provided)
+- `timestamp`: Current timestamp in ISO 8601 format
+- `custom`: Custom metadata (if provided during loading)
+
+## Example Policies
+
+### Framework Restriction
+
+Only allow PyTorch:
+
+```rego
+package cryptotensors
+
+default allow = false
+
+allow {
+    input.framework == "pytorch"
+}
+```
+
+### Version Restriction
+
+Require specific framework version:
+
+```rego
+package cryptotensors
+
+default allow = false
+
+allow {
+    input.framework == "pytorch"
+    input.framework_version >= "2.0.0"
+}
+```
+
+### Environment Restriction
+
+Only allow production environment:
+
+```rego
+package cryptotensors
+
+default allow = false
+
+allow {
+    input.environment == "production"
+}
+```
+
+### Time-Based Access
+
+Allow access only during business hours:
+
+```rego
+package cryptotensors
+
+import future.keywords.in
+
+default allow = false
+
+allow {
+    input.framework == "pytorch"
+    hour := time.clock(time.now_ns())[0]
+    hour >= 9
+    hour < 17
+}
+```
+
+### Complex Policy
+
+Combine multiple conditions:
+
+```rego
+package cryptotensors
+
+default allow = false
+
+allow {
+    # Must be PyTorch 2.0+
+    input.framework == "pytorch"
+    input.framework_version >= "2.0.0"
+    
+    # Must be production environment
+    input.environment == "production"
+    
+    # Custom deployment ID must be in approved list
+    input.custom.deployment_id == "deploy-123"
+}
+```
+
+## Using Policies
+
+### Adding a Policy When Saving
+
+```python
+import torch
+from cryptotensors.torch import save_file
+
+tensors = {"weight": torch.zeros((100, 100))}
+
+# Define policy
+policy = {
+    "local": """
+        package cryptotensors
+        
+        default allow = false
+        
+        allow {
+            input.framework == "pytorch"
+            input.environment == "production"
+        }
+    """
+}
+
+config = {
+    "enc_key": enc_key,
+    "sign_key": sign_key,
+    "policy": policy,
+}
+
+save_file(tensors, "model.cryptotensors", config=config)
+```
+
+### Policy with Remote Source
+
+You can also reference a remote policy:
+
+```python
+policy = {
+    "remote": "https://example.com/policies/model-policy.rego"
+}
+```
+
+### Loading with Policy Context
+
+When loading, provide context for policy evaluation:
+
+```python
+from cryptotensors.torch import load_file
+
+# Policy is automatically evaluated with default context
+tensors = load_file("model.cryptotensors")
+
+# Or provide custom context (if supported by your framework)
+# This depends on the specific implementation
+```
+
+## Policy Best Practices
+
+### 1. Start with Restrictive Defaults
+
+Always set `default allow = false` to ensure explicit permission:
+
+```rego
+default allow = false
+```
+
+### 2. Use Clear Conditions
+
+Make policy conditions explicit and easy to understand:
+
+```rego
+allow {
+    input.framework == "pytorch"
+    input.framework_version >= "2.0.0"
+    input.environment == "production"
+}
+```
+
+### 3. Test Policies
+
+Test your policies before deploying:
+
+```python
+# Test policy evaluation
+policy_code = """
+package cryptotensors
+default allow = false
+allow {
+    input.framework == "pytorch"
+}
+"""
+
+# Verify it works with your test cases
+```
+
+### 4. Version Your Policies
+
+Include policy version in comments:
+
+```rego
+# Policy version: 1.0
+# Last updated: 2025-01-15
+package cryptotensors
+```
+
+### 5. Document Policy Logic
+
+Add comments explaining complex rules:
+
+```rego
+package cryptotensors
+
+default allow = false
+
+# Allow PyTorch in production
+# Block all other frameworks
+allow {
+    input.framework == "pytorch"
+    input.environment == "production"
+}
+```
+
+## Policy Errors
+
+If a policy denies access, you'll see an error:
+
+```
+CryptoTensorsError: Access denied by policy
+```
+
+Common causes:
+- Policy condition not met (wrong framework, environment, etc.)
+- Policy syntax error
+- Missing required context
+
+To debug:
+1. Check the policy code for syntax errors
+2. Verify the input context matches policy expectations
+3. Test the policy with sample inputs
+4. Review policy logs (if available)
+
+## Advanced Features
+
+### Custom Input Data
+
+Some implementations may support custom input data for policy evaluation:
+
+```python
+# This is implementation-specific
+# Check your framework's documentation
+custom_context = {
+    "deployment_id": "deploy-123",
+    "region": "us-east-1",
+    "user_id": "user-456"
+}
+```
+
+### Policy Composition
+
+You can combine multiple policy rules:
+
+```rego
+package cryptotensors
+
+default allow = false
+
+# Rule 1: Allow PyTorch
+allow {
+    input.framework == "pytorch"
+}
+
+# Rule 2: Allow TensorFlow in staging
+allow {
+    input.framework == "tensorflow"
+    input.environment == "staging"
+}
+```
+
+### Policy Testing
+
+Test policies independently:
+
+```python
+import regorus
+
+# Load and test policy
+policy_code = """
+package cryptotensors
+default allow = false
+allow {
+    input.framework == "pytorch"
+}
+"""
+
+# Test with different inputs
+test_inputs = [
+    {"framework": "pytorch", "environment": "production"},
+    {"framework": "tensorflow", "environment": "production"},
+]
+
+for test_input in test_inputs:
+    # Evaluate policy (implementation-specific)
+    result = evaluate_policy(policy_code, test_input)
+    print(f"Input: {test_input}, Allowed: {result}")
+```
+
+## Security Considerations
+
+1. **Policy Integrity**: Policies are signed along with the file, preventing tampering
+2. **Policy Privacy**: Policies are stored in encrypted metadata, not visible in plaintext
+3. **Policy Updates**: To change a policy, you must re-encrypt the file with the new policy
+4. **Policy Complexity**: Keep policies simple to avoid performance issues and bugs
+5. **Policy Testing**: Thoroughly test policies before production use
+
+## Integration with Key Management
+
+Policies work together with the key management system:
+
+1. Keys are retrieved from key providers
+2. Policy is evaluated with loading context
+3. If policy allows, decryption proceeds with the keys
+4. If policy denies, decryption is blocked
+
+This provides defense in depth: even if keys are compromised, policies can prevent unauthorized access.
+
+## See Also
+
+- [Key Management](./key_management) - How to manage encryption keys
+- [Encryption & Decryption](./encryption) - Core encryption features
+- [Integration Examples](./examples) - Real-world usage examples
+
+

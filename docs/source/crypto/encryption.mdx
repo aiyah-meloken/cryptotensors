@@ -1,0 +1,197 @@
+# Encryption & Decryption
+
+CryptoTensors extends safetensors with encryption capabilities, allowing you to encrypt tensor data while maintaining the same fast, zero-copy performance characteristics of safetensors.
+
+## Supported Algorithms
+
+CryptoTensors supports the following encryption algorithms:
+
+- **AES-128-GCM**: Advanced Encryption Standard with 128-bit keys and Galois/Counter Mode
+- **AES-256-GCM**: Advanced Encryption Standard with 256-bit keys and Galois/Counter Mode  
+- **ChaCha20-Poly1305**: ChaCha20 stream cipher with Poly1305 authentication
+
+All algorithms provide authenticated encryption, ensuring both confidentiality and integrity of your tensor data.
+
+## Basic Usage
+
+### Encrypting Tensors During Serialization
+
+To encrypt tensors when saving, provide an encryption configuration:
+
+```python
+import torch
+from cryptotensors.torch import save_file
+
+# Prepare your tensors
+tensors = {
+    "embedding": torch.zeros((1024, 1024)),
+    "attention": torch.zeros((1024, 1024))
+}
+
+# Create encryption configuration
+enc_key = {
+    "kty": "oct",
+    "alg": "aes256gcm",
+    "k": "L+xl38kCEteXk+6Tm1mzu5JvFriVibzAsgpYX2WmAgA=",  # Base64-encoded key
+    "kid": "my-encryption-key",
+}
+
+sign_key = {
+    "kty": "okp",
+    "alg": "ed25519",
+    "d": "uTKTjQL6pX1Tqb7Hpor4A1s+TdgHReQEITZWWAf7DIc=",  # Private key
+    "x": "xkqFcGjXCBMk75q0259N1ggRJsqc+FTAiXMuKX72fd8=",  # Public key
+    "kid": "my-signing-key",
+}
+
+config = {
+    "enc_key": enc_key,
+    "sign_key": sign_key,
+}
+
+# Save with encryption
+save_file(tensors, "model.cryptotensors", config=config)
+```
+
+### Decrypting Tensors During Deserialization
+
+Decryption is transparent when using key providers. Simply load the file as usual:
+
+```python
+from cryptotensors.torch import load_file
+
+# Keys are automatically retrieved from registered providers
+tensors = load_file("model.cryptotensors")
+```
+
+For more details on key management, see the [Key Management](./key_management) guide.
+
+## Partial Encryption
+
+You can encrypt only specific tensors while leaving others in plaintext:
+
+```python
+config = {
+    "enc_key": enc_key,
+    "sign_key": sign_key,
+    "tensors": ["embedding", "attention"],  # Only encrypt these tensors
+}
+
+save_file(tensors, "model.cryptotensors", config=config)
+```
+
+If `tensors` is not specified or is `None`, all tensors are encrypted.
+
+## Key Format (JWK)
+
+CryptoTensors uses JSON Web Key (JWK) format for key material. This provides:
+
+- Standardized key representation
+- Algorithm specification
+- Key identification via `kid` (key ID)
+- Base64-encoded key material
+
+### Encryption Key Format
+
+```json
+{
+  "kty": "oct",
+  "alg": "aes256gcm",
+  "k": "<base64-encoded-key>",
+  "kid": "my-encryption-key"
+}
+```
+
+- `kty`: Key type, must be `"oct"` (octet sequence) for symmetric keys
+- `alg`: Algorithm identifier (`"aes128gcm"`, `"aes256gcm"`, or `"chacha20poly1305"`)
+- `k`: Base64-encoded key material
+- `kid`: Key identifier (optional but recommended)
+
+### Signing Key Format
+
+```json
+{
+  "kty": "okp",
+  "alg": "ed25519",
+  "d": "<base64-encoded-private-key>",
+  "x": "<base64-encoded-public-key>",
+  "kid": "my-signing-key"
+}
+```
+
+- `kty`: Key type, must be `"okp"` (Octet Key Pair) for Ed25519
+- `alg`: Algorithm identifier, must be `"ed25519"`
+- `d`: Base64-encoded private key (32 bytes)
+- `x`: Base64-encoded public key (32 bytes)
+- `kid`: Key identifier (optional but recommended)
+
+## Generating Keys
+
+You can generate keys programmatically:
+
+```python
+import secrets
+import base64
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
+
+# Generate encryption key (32 bytes for AES-256-GCM)
+enc_key_bytes = secrets.token_bytes(32)
+enc_key = {
+    "kty": "oct",
+    "alg": "aes256gcm",
+    "kid": "my-enc-key",
+    "k": base64.b64encode(enc_key_bytes).decode("ascii"),
+}
+
+# Generate signing key pair
+private_key = ed25519.Ed25519PrivateKey.generate()
+public_key = private_key.public_key()
+
+private_bytes = private_key.private_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PrivateFormat.Raw,
+    encryption_algorithm=serialization.NoEncryption(),
+)
+public_bytes = public_key.public_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PublicFormat.Raw,
+)
+
+sign_key = {
+    "kty": "okp",
+    "alg": "ed25519",
+    "kid": "my-sign-key",
+    "d": base64.b64encode(private_bytes).decode("ascii"),
+    "x": base64.b64encode(public_bytes).decode("ascii"),
+}
+```
+
+Or save keys to a JWK file:
+
+```python
+import json
+
+keys = {"keys": [enc_key, sign_key]}
+with open("key.jwk", "w") as f:
+    json.dump(keys, f, indent=2)
+```
+
+## Security Considerations
+
+1. **Key Storage**: Never commit encryption keys to version control. Use secure key management systems or environment variables.
+
+2. **Key Rotation**: Plan for key rotation in production environments. CryptoTensors supports multiple keys via the key provider system.
+
+3. **Algorithm Selection**: 
+   - AES-256-GCM is recommended for most use cases
+   - AES-128-GCM provides good security with smaller keys
+   - ChaCha20-Poly1305 is a good alternative, especially on non-AES hardware
+
+4. **Partial Encryption**: When using partial encryption, be aware that unencrypted tensors are visible in plaintext. Only use this when appropriate for your security model.
+
+5. **Signature Verification**: Always verify signatures when loading encrypted files to ensure file integrity and authenticity.
+
+For more information on key management and security best practices, see the [Key Management](./key_management) and [Signing & Verification](./signing) guides.
+
+

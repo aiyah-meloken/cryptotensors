@@ -28,16 +28,22 @@ class CryptoTfTestCase(unittest.TestCase):
 
     def test_roundtrip_encrypted(self):
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
-            save_file(self.data, f.name, config=self.config)
-            reloaded = load_file(f.name)
-            os.unlink(f.name)
+            filename = f.name
+        try:
+            save_file(self.data, filename, config=self.config)
+            reloaded = load_file(filename)
 
-        for k, v in self.data.items():
-            tv = reloaded[k]
-            # Handle both TensorFlow tensors and numpy arrays
-            v_np = v.numpy() if hasattr(v, "numpy") else v
-            tv_np = tv.numpy() if hasattr(tv, "numpy") else tv
-            self.assertTrue(np.allclose(v_np, tv_np))
+            for k, v in self.data.items():
+                tv = reloaded[k]
+                # Handle both TensorFlow tensors and numpy arrays
+                v_np = v.numpy() if hasattr(v, "numpy") else v
+                tv_np = tv.numpy() if hasattr(tv, "numpy") else tv
+                self.assertTrue(np.allclose(v_np, tv_np))
+        finally:
+            try:
+                os.unlink(filename)
+            except (OSError, PermissionError):
+                pass
 
     def test_roundtrip_algorithms(self):
         algos = ["aes128gcm", "aes256gcm", "chacha20poly1305"]
@@ -49,16 +55,16 @@ class CryptoTfTestCase(unittest.TestCase):
                 cryptotensors.register_key_provider(
                     keys=[keys["enc_key"], keys["sign_key"]]
                 )
+                # Create a copy of self.data to avoid modifying the original
+                # since _tf2np modifies the dict in place
+                data_copy = {k: v for k, v in self.data.items()}
+                with tempfile.NamedTemporaryFile(
+                    suffix=".safetensors", delete=False
+                ) as f:
+                    filename = f.name
                 try:
-                    # Create a copy of self.data to avoid modifying the original
-                    # since _tf2np modifies the dict in place
-                    data_copy = {k: v for k, v in self.data.items()}
-                    with tempfile.NamedTemporaryFile(
-                        suffix=".safetensors", delete=False
-                    ) as f:
-                        save_file(data_copy, f.name, config=config)
-                        reloaded = load_file(f.name)
-                        os.unlink(f.name)
+                    save_file(data_copy, filename, config=config)
+                    reloaded = load_file(filename)
 
                     for k, v in self.data.items():
                         tv = reloaded[k]
@@ -68,14 +74,20 @@ class CryptoTfTestCase(unittest.TestCase):
                         self.assertTrue(np.allclose(v_np, tv_np))
                 finally:
                     cryptotensors.disable_provider("temp")
+                    try:
+                        os.unlink(filename)
+                    except (OSError, PermissionError):
+                        pass
 
     def test_partial_encryption(self):
         config = create_crypto_config(**self.keys, tensors=["test"])
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
-            save_file(self.data, f.name, config=config)
-            reloaded = load_file(f.name)
+            filename = f.name
+        try:
+            save_file(self.data, filename, config=config)
+            reloaded = load_file(filename)
 
-            with safe_open(f.name, framework="tf") as handle:
+            with safe_open(filename, framework="tf") as handle:
                 metadata = handle.metadata()
                 import json
 
@@ -83,21 +95,30 @@ class CryptoTfTestCase(unittest.TestCase):
                 self.assertIn("test", enc_info)
                 self.assertNotIn("test2", enc_info)
 
-            os.unlink(f.name)
-
-        for k, v in self.data.items():
-            tv = reloaded[k]
-            # Handle both TensorFlow tensors and numpy arrays
-            v_np = v.numpy() if hasattr(v, "numpy") else v
-            tv_np = tv.numpy() if hasattr(tv, "numpy") else tv
-            self.assertTrue(np.allclose(v_np, tv_np))
+            for k, v in self.data.items():
+                tv = reloaded[k]
+                # Handle both TensorFlow tensors and numpy arrays
+                v_np = v.numpy() if hasattr(v, "numpy") else v
+                tv_np = tv.numpy() if hasattr(tv, "numpy") else tv
+                self.assertTrue(np.allclose(v_np, tv_np))
+        finally:
+            try:
+                os.unlink(filename)
+            except (OSError, PermissionError):
+                pass
 
     def test_bfloat16_encrypted(self):
         # bfloat16 is often used in models
         data = {"bf16": tf.cast(tf.random.normal((2, 2)), tf.bfloat16)}
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
-            save_file(data, f.name, config=self.config)
-            reloaded = load_file(f.name)
-            os.unlink(f.name)
+            filename = f.name
+        try:
+            save_file(data, filename, config=self.config)
+            reloaded = load_file(filename)
 
-        self.assertTrue(tf.experimental.numpy.allclose(data["bf16"], reloaded["bf16"]))
+            self.assertTrue(tf.experimental.numpy.allclose(data["bf16"], reloaded["bf16"]))
+        finally:
+            try:
+                os.unlink(filename)
+            except (OSError, PermissionError):
+                pass

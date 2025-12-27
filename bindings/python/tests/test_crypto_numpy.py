@@ -27,13 +27,19 @@ class CryptoNumpyTestCase(unittest.TestCase):
 
     def test_roundtrip_encrypted(self):
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
-            save_file(self.data, f.name, config=self.config)
-            reloaded = load_file(f.name)
-            os.unlink(f.name)
+            filename = f.name
+        try:
+            save_file(self.data, filename, config=self.config)
+            reloaded = load_file(filename)
 
-        for k, v in self.data.items():
-            tv = reloaded[k]
-            self.assertTrue(np.allclose(v, tv))
+            for k, v in self.data.items():
+                tv = reloaded[k]
+                self.assertTrue(np.allclose(v, tv))
+        finally:
+            try:
+                os.unlink(filename)
+            except (OSError, PermissionError):
+                pass
 
     def test_roundtrip_algorithms(self):
         algos = ["aes128gcm", "aes256gcm", "chacha20poly1305"]
@@ -45,26 +51,32 @@ class CryptoNumpyTestCase(unittest.TestCase):
                 cryptotensors.register_key_provider(
                     keys=[keys["enc_key"], keys["sign_key"]]
                 )
+                with tempfile.NamedTemporaryFile(
+                    suffix=".safetensors", delete=False
+                ) as f:
+                    filename = f.name
                 try:
-                    with tempfile.NamedTemporaryFile(
-                        suffix=".safetensors", delete=False
-                    ) as f:
-                        save_file(self.data, f.name, config=config)
-                        reloaded = load_file(f.name)
-                        os.unlink(f.name)
+                    save_file(self.data, filename, config=config)
+                    reloaded = load_file(filename)
 
                     for k, v in self.data.items():
                         self.assertTrue(np.allclose(v, reloaded[k]))
                 finally:
                     cryptotensors.disable_provider("temp")
+                    try:
+                        os.unlink(filename)
+                    except (OSError, PermissionError):
+                        pass
 
     def test_partial_encryption(self):
         config = create_crypto_config(**self.keys, tensors=["test"])
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
-            save_file(self.data, f.name, config=config)
-            reloaded = load_file(f.name)
+            filename = f.name
+        try:
+            save_file(self.data, filename, config=config)
+            reloaded = load_file(filename)
 
-            with safe_open(f.name, framework="np") as handle:
+            with safe_open(filename, framework="np") as handle:
                 metadata = handle.metadata()
                 import json
 
@@ -72,16 +84,25 @@ class CryptoNumpyTestCase(unittest.TestCase):
                 self.assertIn("test", enc_info)
                 self.assertNotIn("test2", enc_info)
 
-            os.unlink(f.name)
-
-        for k, v in self.data.items():
-            self.assertTrue(np.allclose(v, reloaded[k]))
+            for k, v in self.data.items():
+                self.assertTrue(np.allclose(v, reloaded[k]))
+        finally:
+            try:
+                os.unlink(filename)
+            except (OSError, PermissionError):
+                pass
 
     def test_complex64_encrypted(self):
         data = {"c64": np.random.normal(size=(2, 2)).astype(np.complex64)}
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
-            save_file(data, f.name, config=self.config)
-            reloaded = load_file(f.name)
-            os.unlink(f.name)
+            filename = f.name
+        try:
+            save_file(data, filename, config=self.config)
+            reloaded = load_file(filename)
 
-        self.assertTrue(np.allclose(data["c64"], reloaded["c64"]))
+            self.assertTrue(np.allclose(data["c64"], reloaded["c64"]))
+        finally:
+            try:
+                os.unlink(filename)
+            except (OSError, PermissionError):
+                pass

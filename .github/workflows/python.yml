@@ -160,34 +160,13 @@ jobs:
       - name: Set short sha
         id: vars
         run: echo "GITHUB_SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v4
-        with:
-          # list of Docker images to use as base name for tags
-          images: |
-            ghcr.io/huggingface/safetensors/s390x
-          # generate Docker tags based on the following events/attributes
-          tags: |
-            type=schedule
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha
-      - name: Login to Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Test big endian
         uses: docker/build-push-action@v4
         with:
           platforms: linux/s390x
           file: Dockerfile.s390x.test
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=ghcr.io/huggingface/safetensors/s390x:cache,mode=max
-          cache-to: type=registry,ref=ghcr.io/huggingface/safetensors/s390x:cache,mode=max
+          push: false  # Only build and test, don't push image
+          # Use GitHub Actions Cache instead of registry cache
+          # This avoids permission errors and is faster
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

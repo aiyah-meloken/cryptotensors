@@ -116,7 +116,9 @@ class CryptoTfTestCase(unittest.TestCase):
             save_file(data, filename, config=self.config)
             reloaded = load_file(filename)
 
-            self.assertTrue(tf.experimental.numpy.allclose(data["bf16"], reloaded["bf16"]))
+            self.assertTrue(
+                tf.experimental.numpy.allclose(data["bf16"], reloaded["bf16"])
+            )
         finally:
             try:
                 os.unlink(filename)

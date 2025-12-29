@@ -1,6 +1,8 @@
 # MODIFIED: Added encryption/decryption support for CryptoTensors
 # This is a derivative work based on the safetensors project by Hugging Face Inc.
 import json
+import os
+from importlib.metadata import entry_points
 from ._safetensors_rust import (  # noqa: F401
     SafetensorError,
     __version__,
@@ -10,13 +12,41 @@ from ._safetensors_rust import (  # noqa: F401
     serialize,
     serialize_file,
     disable_provider,
+    py_load_provider_native as _load_provider_native,
     _register_key_provider_internal,
 )
 
 
-def register_key_provider(*, files=None, keys=None):
+def _find_provider_native_lib(name: str) -> str:
+    """Find provider native library path via entry_points"""
+    eps = entry_points(group="cryptotensors.providers")
+    for ep in eps:
+        if ep.name == name:
+            # Load the module and get the native lib path
+            module = ep.load()
+            if hasattr(module, "get_native_lib_path"):
+                return module.get_native_lib_path()
+            else:
+                # Fallback: assume the module itself is the path or has it
+                raise ValueError(f"Provider '{name}' module does not have get_native_lib_path()")
+    raise ValueError(f"Provider '{name}' not found. Install with: pip install cryptotensors-provider-{name}")
+
+
+def init_key_provider(name: str, **config):
+    """Initialize and activate a key provider"""
+    lib_path = _find_provider_native_lib(name)
+    _load_provider_native(name, lib_path, json.dumps(config))
+
+
+def list_key_providers() -> list:
+    """List available key providers"""
+    eps = entry_points(group="cryptotensors.providers")
+    return [ep.name for ep in eps]
+
+
+def register_tmp_key_provider(*, files=None, keys=None):
     """
-    Register temporary key provider
+    Register temporary key provider (highest priority)
 
     Args:
         files: List of key file paths, Python handles reading and parsing
@@ -73,5 +103,7 @@ __all__ = [
     "serialize",
     "serialize_file",
     "disable_provider",
-    "register_key_provider",
+    "register_tmp_key_provider",
+    "init_key_provider",
+    "list_key_providers",
 ]

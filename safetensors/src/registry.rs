@@ -9,16 +9,32 @@
 // modifying the core cryptotensors library.
 
 use crate::cryptotensors::CryptoTensorsError;
-#[cfg(feature = "provider-file")]
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use ring::signature;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::sync::{OnceLock, RwLock};
+
+// ============================================================================
+// Security Constants
+// ============================================================================
+
+/// Hardcoded public keys for verifying provider signatures (Ed25519, Base64)
+/// Each provider can have its own trusted public key.
+const PROVIDER_PUBLIC_KEYS: &[(&str, &str)] = &[
+    // Add providers and their public keys here
+    // ("aws-kms", "..."),
+];
 
 // ============================================================================
 // Priority Constants
 // ============================================================================
 
-/// Priority for temporary providers registered via Python
+/// Priority for temporary providers registered via Python (highest)
 pub const PRIORITY_TEMP: i32 = 100;
+/// Priority for native providers loaded from shared libraries
+pub const PRIORITY_NATIVE: i32 = 50;
 /// Priority for file-based providers
 pub const PRIORITY_FILE: i32 = 10;
 /// Priority for environment-based providers (default fallback)
@@ -476,7 +492,7 @@ impl KeyProvider for EnvKeyProvider {
     }
 }
 
-/// Temporary key provider (used by Python register_key_provider)
+/// Temporary key provider (used by Python register_tmp_key_provider)
 pub struct TempKeyProvider {
     keys: Vec<serde_json::Value>,
 }
@@ -524,6 +540,14 @@ impl KeyProvider for TempKeyProvider {
 
 /// Trait for key providers (KMS, HSM, file-based, etc.)
 pub trait KeyProvider: Send + Sync {
+    /// Provider name for logging/debugging
+    fn name(&self) -> &str;
+
+    /// Initialize the provider with configuration
+    fn initialize(&mut self, _config_json: &str) -> Result<(), CryptoTensorsError> {
+        Ok(())
+    }
+
     /// Check if the provider is ready to provide keys
     fn is_ready(&self) -> bool;
 
@@ -543,15 +567,14 @@ pub trait KeyProvider: Send + Sync {
         jku: Option<&str>,
         kid: Option<&str>,
     ) -> Result<serde_json::Value, CryptoTensorsError>;
-
-    /// Provider name for logging/debugging
-    fn name(&self) -> &str;
 }
 
 struct ProviderEntry {
     provider: Box<dyn KeyProvider>,
     priority: i32,
     enabled: bool,
+    /// The loaded dynamic library (if any) to keep it alive in memory
+    _lib: Option<std::sync::Arc<libloading::Library>>,
 }
 
 static PROVIDERS: OnceLock<RwLock<Vec<ProviderEntry>>> = OnceLock::new();
@@ -565,6 +588,7 @@ fn get_providers() -> &'static RwLock<Vec<ProviderEntry>> {
             provider: Box::new(EnvKeyProvider::new()),
             priority: PRIORITY_ENV,
             enabled: true,
+            _lib: None,
         });
 
         #[cfg(feature = "provider-file")]
@@ -572,6 +596,7 @@ fn get_providers() -> &'static RwLock<Vec<ProviderEntry>> {
             provider: Box::new(FileKeyProvider::new(Vec::new())),
             priority: PRIORITY_FILE,
             enabled: true,
+            _lib: None,
         });
 
         RwLock::new(entries)
@@ -581,6 +606,15 @@ fn get_providers() -> &'static RwLock<Vec<ProviderEntry>> {
 /// Register a key provider with a specific priority
 /// If a provider with the same name already exists, it will be removed first
 pub fn register_provider_with_priority(provider: Box<dyn KeyProvider>, priority: i32) {
+    register_provider_full(provider, priority, None);
+}
+
+/// Internal helper to register provider with full details
+fn register_provider_full(
+    provider: Box<dyn KeyProvider>,
+    priority: i32,
+    lib: Option<std::sync::Arc<libloading::Library>>,
+) {
     let providers = get_providers();
     if let Ok(mut guard) = providers.write() {
         // Remove any existing provider with the same name
@@ -591,6 +625,7 @@ pub fn register_provider_with_priority(provider: Box<dyn KeyProvider>, priority:
             provider,
             priority,
             enabled: true,
+            _lib: lib,
         });
         // Sort by priority descending
         guard.sort_by(|a, b| b.priority.cmp(&a.priority));
@@ -628,6 +663,96 @@ pub fn clear_providers() {
     if let Ok(mut guard) = providers.write() {
         guard.clear();
     }
+}
+
+/// Function signature for creating a provider in a dynamic library
+pub type CreateProviderFn = unsafe extern "C" fn() -> *mut dyn KeyProvider;
+
+/// Verify the signature of a library file using the hardcoded public key.
+/// Expects a signature file at <lib_path>.sig
+fn verify_library_signature(provider_name: &str, lib_path: &str) -> Result<(), CryptoTensorsError> {
+    let sig_path = format!("{}.sig", lib_path);
+
+    // Find the public key for this provider
+    let public_key_str = PROVIDER_PUBLIC_KEYS
+        .iter()
+        .find(|(name, _)| *name == provider_name)
+        .map(|(_, key)| *key)
+        .ok_or_else(|| {
+            CryptoTensorsError::Registry(format!(
+                "No trusted public key configured for provider: {}",
+                provider_name
+            ))
+        })?;
+
+    // Read library file
+    let mut lib_file = File::open(lib_path)
+        .map_err(|e| CryptoTensorsError::Registry(format!("Failed to open library: {}", e)))?;
+    let mut lib_data = Vec::new();
+    lib_file.read_to_end(&mut lib_data)
+        .map_err(|e| CryptoTensorsError::Registry(format!("Failed to read library: {}", e)))?;
+
+    // Read signature file
+    let sig_path_obj = std::path::Path::new(&sig_path);
+    if !sig_path_obj.exists() {
+        return Err(CryptoTensorsError::Registry(format!(
+            "Signature file missing: {}",
+            sig_path
+        )));
+    }
+
+    let mut sig_file = File::open(&sig_path)
+        .map_err(|e| CryptoTensorsError::Registry(format!("Failed to open signature file: {}", e)))?;
+    let mut sig_base64 = String::new();
+    sig_file.read_to_string(&mut sig_base64)
+        .map_err(|e| CryptoTensorsError::Registry(format!("Failed to read signature: {}", e)))?;
+
+    let signature = BASE64.decode(sig_base64.trim()).map_err(|e| {
+        CryptoTensorsError::Registry(format!("Invalid signature encoding: {}", e))
+    })?;
+
+    // Decode public key
+    let public_key_bytes = BASE64.decode(public_key_str).map_err(|e| {
+        CryptoTensorsError::Registry(format!("Invalid public key encoding: {}", e))
+    })?;
+
+    // Verify signature
+    let peer_public_key = signature::UnparsedPublicKey::new(&signature::ED25519, public_key_bytes);
+    peer_public_key.verify(&lib_data, &signature).map_err(|e| {
+        CryptoTensorsError::Registry(format!("Signature verification failed: {}", e))
+    })?;
+
+    Ok(())
+}
+
+/// Dynamically load a native provider from a shared library
+pub fn load_provider_native(
+    name: &str,
+    lib_path: &str,
+    config_json: &str,
+) -> Result<(), CryptoTensorsError> {
+    // SECURITY: Verify the signature of the library before loading it
+    verify_library_signature(name, lib_path)?;
+
+    let lib = unsafe {
+        libloading::Library::new(lib_path)
+            .map_err(|e| CryptoTensorsError::Registry(format!("Failed to load library: {}", e)))?
+    };
+
+    let lib = std::sync::Arc::new(lib);
+
+    let create_fn: libloading::Symbol<CreateProviderFn> = unsafe {
+        lib.get(b"cryptotensors_create_provider").map_err(|e| {
+            CryptoTensorsError::Registry(format!("Missing symbol in provider library: {}", e))
+        })?
+    };
+
+    let mut provider = unsafe { Box::from_raw(create_fn()) };
+    provider.initialize(config_json)?;
+
+    register_provider_full(provider, PRIORITY_NATIVE, Some(lib));
+
+    Ok(())
 }
 
 /// Get the number of registered providers

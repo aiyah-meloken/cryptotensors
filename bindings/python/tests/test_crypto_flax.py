@@ -25,7 +25,7 @@ class CryptoFlaxTestCase(unittest.TestCase):
         self.keys = generate_test_keys(algorithm="aes256gcm")
         self.config = create_crypto_config(**self.keys)
         # Register key provider for decryption
-        cryptotensors.register_key_provider(
+        cryptotensors.register_tmp_key_provider(
             keys=[self.keys["enc_key"], self.keys["sign_key"]]
         )
 
@@ -50,7 +50,7 @@ class CryptoFlaxTestCase(unittest.TestCase):
                 keys = generate_test_keys(algorithm=algo)
                 config = create_crypto_config(**keys)
                 # Register keys for this algorithm
-                cryptotensors.register_key_provider(
+                cryptotensors.register_tmp_key_provider(
                     keys=[keys["enc_key"], keys["sign_key"]]
                 )
                 try:

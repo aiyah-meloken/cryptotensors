@@ -10,7 +10,7 @@
 // Original Copyright: Copyright 2022 The HuggingFace Inc. team
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use safetensors::tensor::*;
+use cryptotensors::tensor::*;
 use std::collections::HashMap;
 use std::hint::black_box;
 

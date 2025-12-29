@@ -32,8 +32,9 @@ pub use cryptotensors::{CryptoTensors, CryptoTensorsError, SerializeCryptoConfig
 pub use key::KeyMaterial;
 pub use policy::AccessPolicy;
 pub use registry::{
-    disable_provider, enable_provider, register_provider, register_provider_with_priority,
-    KeyProvider, TempKeyProvider, PRIORITY_ENV, PRIORITY_FILE, PRIORITY_TEMP,
+    disable_provider, enable_provider, load_provider_native, register_provider,
+    register_provider_with_priority, KeyProvider, TempKeyProvider, PRIORITY_ENV, PRIORITY_FILE,
+    PRIORITY_NATIVE, PRIORITY_TEMP,
 };
 
 #[cfg(feature = "provider-env")]

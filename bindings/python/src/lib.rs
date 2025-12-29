@@ -30,7 +30,14 @@ use std::sync::OnceLock;
 use safetensors::cryptotensors::{CryptoTensors, SerializeCryptoConfig};
 use safetensors::key::KeyMaterial;
 use safetensors::policy::AccessPolicy;
-use safetensors::registry::{self, TempKeyProvider, PRIORITY_TEMP};
+use safetensors::registry::{self, load_provider_native, TempKeyProvider, PRIORITY_TEMP};
+
+/// MODIFIED: Load a native provider from a shared library.
+#[pyfunction]
+fn py_load_provider_native(name: &str, lib_path: &str, config_json: &str) -> PyResult<()> {
+    load_provider_native(name, lib_path, config_json)
+        .map_err(|e| PyException::new_err(e.to_string()))
+}
 
 /// MODIFIED: Disable and remove a key provider by name.
 #[pyfunction]
@@ -1991,6 +1998,7 @@ fn _safetensors_rust(m: &PyBound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(serialize, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_file, m)?)?;
     m.add_function(wrap_pyfunction!(deserialize, m)?)?;
+    m.add_function(wrap_pyfunction!(py_load_provider_native, m)?)?;
     m.add_function(wrap_pyfunction!(disable_provider, m)?)?;
     m.add_function(wrap_pyfunction!(_register_key_provider_internal, m)?)?;
     m.add_class::<safe_open>()?;

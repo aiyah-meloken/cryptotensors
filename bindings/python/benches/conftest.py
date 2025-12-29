@@ -27,7 +27,7 @@ def crypto_config():
     # Register key provider for decryption
     import cryptotensors
 
-    cryptotensors.register_key_provider(keys=[keys["enc_key"], keys["sign_key"]])
+    cryptotensors.register_tmp_key_provider(keys=[keys["enc_key"], keys["sign_key"]])
 
     yield config
 

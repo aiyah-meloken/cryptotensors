@@ -50,7 +50,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # Make sure it's up to date and using stable channel
 rustup update
 git clone <repository-url>
-cd open-cryptotensors/bindings/python
+cd cryptotensors/bindings/python
 pip install setuptools_rust
 pip install -e .
 ```
@@ -98,7 +98,7 @@ save_file(tensors, "model.cryptotensors", config=config)
 tensors = load_file("model.cryptotensors")
 ```
 
-See the [documentation](https://your-username.github.io/open-cryptotensors/) for detailed guides on encryption, key management, and integration examples.
+See the [documentation](https://aiyah-meloken.github.io/cryptotensors/) for detailed guides on encryption, key management, and integration examples.
 
 **Note**: CryptoTensors is fully backward compatible with safetensors. You can use `cryptotensors` as a drop-in replacement for `safetensors` in most cases.
 

@@ -7,6 +7,9 @@
 //! - Added `config` parameter to serialize/serialize_file for encryption
 //! - Added CryptoTensors integration for transparent decryption
 //! - Added KeyMaterial and AccessPolicy parsing from Python dicts
+use cryptotensors::slice::TensorIndexer;
+use cryptotensors::tensor::{Dtype, Metadata, SafeTensors, TensorInfo, TensorView};
+use cryptotensors::View;
 use memmap2::{Mmap, MmapOptions};
 use pyo3::exceptions::{PyException, PyFileNotFoundError};
 use pyo3::prelude::*;
@@ -15,9 +18,6 @@ use pyo3::types::IntoPyDict;
 use pyo3::types::{PyBool, PyByteArray, PyBytes, PyDict, PyList, PySlice};
 use pyo3::Bound as PyBound;
 use pyo3::{intern, PyErr};
-use cryptotensors::slice::TensorIndexer;
-use cryptotensors::tensor::{Dtype, Metadata, SafeTensors, TensorInfo, TensorView};
-use cryptotensors::View;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
@@ -257,8 +257,13 @@ fn serialize_file(
     let tensors = prepare(tensor_dict)?;
     let config = prepare_crypto(config)?;
 
-    cryptotensors::tensor::serialize_to_file(&tensors, metadata, filename.as_path(), config.as_ref())
-        .map_err(|e| SafetensorError::new_err(format!("Error while serializing: {e}")))?;
+    cryptotensors::tensor::serialize_to_file(
+        &tensors,
+        metadata,
+        filename.as_path(),
+        config.as_ref(),
+    )
+    .map_err(|e| SafetensorError::new_err(format!("Error while serializing: {e}")))?;
 
     Ok(())
 }

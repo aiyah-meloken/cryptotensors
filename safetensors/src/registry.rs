@@ -666,6 +666,9 @@ pub fn clear_providers() {
 }
 
 /// Function signature for creating a provider in a dynamic library
+/// Note: This uses `dyn KeyProvider` which is not FFI-safe, but acceptable here
+/// as it's only used within Rust code via libloading, not exposed to C.
+#[allow(improper_ctypes_definitions)]
 pub type CreateProviderFn = unsafe extern "C" fn() -> *mut dyn KeyProvider;
 
 /// Verify the signature of a library file using the hardcoded public key.

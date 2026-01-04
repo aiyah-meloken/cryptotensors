@@ -1,0 +1,49 @@
+name: Rust Release
+
+env:
+  CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
+
+on:
+  push:
+    tags:
+      - v*
+
+jobs:
+  rust_publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Check version consistency
+        run: |
+          # Extract version from tag (remove 'v' prefix if present)
+          TAG_VERSION="${GITHUB_REF#refs/tags/}"
+          TAG_VERSION="${TAG_VERSION#v}"
+          
+          # Extract version from Cargo.toml
+          CARGO_VERSION=$(grep -E '^version\s*=' safetensors/Cargo.toml | sed -E 's/^version\s*=\s*"([^"]+)".*/\1/')
+          
+          echo "Tag version: $TAG_VERSION"
+          echo "Cargo.toml version: $CARGO_VERSION"
+          
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "❌ Error: Version mismatch!"
+            echo "Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
+            exit 1
+          fi
+          
+          echo "✅ Version check passed: $TAG_VERSION"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo Registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ubuntu-latest-cargo-registry-${{ hashFiles('**/Cargo.toml') }}
+
+      - name: Publish package rust
+        if: ${{ !contains(github.ref, 'rc') }}
+        working-directory: ./safetensors
+        run: cargo publish --token ${CRATES_TOKEN}
+

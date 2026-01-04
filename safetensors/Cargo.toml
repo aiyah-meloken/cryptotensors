@@ -1,20 +1,19 @@
 [package]
 name = "cryptotensors"
-version = "0.7.0"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
-homepage = "https://github.com/huggingface/safetensors"
-repository = "https://github.com/huggingface/safetensors"
-documentation = "https://docs.rs/safetensors/"
+homepage = "https://github.com/aiyah-meloken/cryptotensors"
+repository = "https://github.com/aiyah-meloken/cryptotensors"
+documentation = "https://docs.rs/cryptotensors/"
 license = "Apache-2.0"
-keywords = ["safetensors", "huggingface", "Tensors", "Pytorch", "Tensorflow"]
+keywords = ["safetensors", "huggingface", "Tensors", "Pytorch", "Tensorflow", "cryptotensors", "encryption", "security"]
 readme = "./README.md"
 description = """
-Provides functions to read and write safetensors which aim to be safer than
-their PyTorch counterpart.
-The format is 8 bytes which is an unsized int, being the size of a JSON header,
-the JSON header refers the `dtype` the `shape` and `data_offsets` which are the offsets
-for the values in the rest of the file.
+CryptoTensors is an extension of safetensors that adds encryption, signing, 
+and access control (Rego-based policy engine) while maintaining full backward
+compatibility with the safetensors format. It provides functions to read and write safetensors
+which aim to be safer than their PyTorch counterpart.
 """
 exclude = ["rust-toolchain", "target/*", "Cargo.lock"]
 

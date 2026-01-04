@@ -27,7 +27,7 @@ dynamic = [
 ]
 
 dependencies = [
-    "cryptotensors>=0.0.1"
+    "cryptotensors>=0.1.0"
 ]
 
 [project.urls]

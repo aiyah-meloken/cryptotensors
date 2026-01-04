@@ -422,7 +422,6 @@ testing = [
     { name = "setuptools-rust" },
 ]
 testingfree = [
-    { name = "cryptography" },
     { name = "huggingface-hub" },
     { name = "hypothesis" },
     { name = "numpy" },
@@ -439,7 +438,6 @@ torch = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", marker = "extra == 'testing'", specifier = ">=41.0.0" },
-    { name = "cryptography", marker = "extra == 'testingfree'", specifier = ">=41.0.0" },
     { name = "cryptotensors", extras = ["all"], marker = "extra == 'dev'" },
     { name = "cryptotensors", extras = ["jax"], marker = "extra == 'all'" },
     { name = "cryptotensors", extras = ["numpy"], marker = "extra == 'all'" },

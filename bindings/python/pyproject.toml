@@ -1,7 +1,7 @@
 [project]
 name = 'cryptotensors'
 requires-python = '>=3.9'
-description = 'CryptoTensors: Safetensors with encryption support for secure model distribution'
+description = 'CryptoTensors is an extension of safetensors that adds encryption, signing, and access control (Rego-based policy engine) while maintaining full backward compatibility with the safetensors format'
 authors = [
     {name = 'Aiyah Meloken', email = 'aiyah_meloken@protonmail.com'}
 ]

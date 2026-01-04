@@ -332,11 +332,20 @@ impl FileKeyProvider {
 #[cfg(feature = "provider-file")]
 impl KeyProvider for FileKeyProvider {
     fn is_ready(&self) -> bool {
-        // Check if any search path exists (as directory)
-        self.search_paths.iter().any(|p| {
-            let path = Path::new(p);
-            path.exists() && path.is_dir()
-        })
+        // FileKeyProvider can always handle absolute file:// paths,
+        // so it's always ready even without search_paths configured.
+        // For relative paths, search_paths are used to resolve them.
+        // If search_paths are configured, verify at least one exists.
+        if self.search_paths.is_empty() {
+            // No search paths configured, but can still handle absolute paths
+            true
+        } else {
+            // Check if any search path exists (as directory)
+            self.search_paths.iter().any(|p| {
+                let path = Path::new(p);
+                path.exists() && path.is_dir()
+            })
+        }
     }
 
     fn matches(&self, jku: Option<&str>, _kid: Option<&str>) -> bool {

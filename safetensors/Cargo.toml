@@ -7,7 +7,7 @@ homepage = "https://github.com/aiyah-meloken/cryptotensors"
 repository = "https://github.com/aiyah-meloken/cryptotensors"
 documentation = "https://docs.rs/cryptotensors/"
 license = "Apache-2.0"
-keywords = ["safetensors", "huggingface", "Tensors", "Pytorch", "Tensorflow", "cryptotensors", "encryption", "security"]
+keywords = ["safetensors", "Pytorch", "cryptotensors", "encryption", "security"]
 readme = "./README.md"
 description = """
 CryptoTensors is an extension of safetensors that adds encryption, signing, 

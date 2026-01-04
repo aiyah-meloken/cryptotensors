@@ -1,0 +1,104 @@
+# Dockerfile for CryptoTensors + Transformers integration testing
+# Tests: Download model -> Encrypt -> Run inference with encrypted model
+
+FROM python:3.11-slim
+
+# Build arguments for mirror configuration
+ARG USE_CHINA_MIRROR=false
+
+# Environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/root/.cargo/bin:${PATH}" \
+    HF_HOME=/app/hf_cache
+
+# Configure apt mirrors (use China mirrors if needed)
+RUN if [ "$USE_CHINA_MIRROR" = "true" ]; then \
+        sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+        sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true; \
+    fi
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust (with optional China mirror)
+ARG RUSTUP_DIST_SERVER=""
+ARG RUSTUP_UPDATE_ROOT=""
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y --default-toolchain stable
+
+# Configure cargo mirror if needed
+RUN if [ "$USE_CHINA_MIRROR" = "true" ]; then \
+        mkdir -p ~/.cargo && \
+        echo '[source.crates-io]' > ~/.cargo/config.toml && \
+        echo 'replace-with = "ustc"' >> ~/.cargo/config.toml && \
+        echo '[source.ustc]' >> ~/.cargo/config.toml && \
+        echo 'registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"' >> ~/.cargo/config.toml; \
+    fi
+
+# Install Python dependencies (with optional China mirror)
+RUN if [ "$USE_CHINA_MIRROR" = "true" ]; then \
+        pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple; \
+    fi && \
+    pip install --no-cache-dir \
+        maturin \
+        build \
+        numpy \
+        setuptools_rust
+
+# Install PyTorch CPU version
+RUN pip install --no-cache-dir \
+    torch --index-url https://download.pytorch.org/whl/cpu
+
+# Install Transformers and related packages
+RUN pip install --no-cache-dir \
+    transformers \
+    accelerate \
+    sentencepiece \
+    protobuf \
+    huggingface_hub
+
+# Create app directory
+WORKDIR /app
+
+# Copy source code (will be mounted or copied at build time)
+COPY . /app/src
+
+# Uninstall original safetensors (we'll replace with cryptotensors)
+RUN pip uninstall -y safetensors || true
+
+# Build cryptotensors Python binding
+WORKDIR /app/src/bindings/python
+RUN maturin build --release --out /app/wheels
+RUN pip install /app/wheels/*.whl
+
+# Build compatible layer (safetensors -> cryptotensors adapter)
+WORKDIR /app/src/bindings/compatible
+RUN python -m build --wheel
+RUN pip install dist/*.whl
+
+# Setup directories
+WORKDIR /app
+RUN mkdir -p /app/data /app/hf_cache /app/models
+
+# Generate JWK key file
+RUN python /app/src/integration-tests/utils/write_jwk.py -o /app/data/key.jwk
+
+# Copy test scripts and utils
+COPY integration-tests/scripts /app/scripts
+COPY integration-tests/utils /app/utils
+RUN chmod +x /app/scripts/*.py /app/scripts/*.sh 2>/dev/null || true
+
+WORKDIR /app/scripts
+
+# Set runtime environment variable for key file
+ENV CRYPTOTENSOR_KEY_JKU=file:///app/data/key.jwk
+
+# Default command: Run full test (convert -> save -> load -> compare)
+CMD ["python", "run_full_test.py"]
+

@@ -1,0 +1,18 @@
+# Generated data files
+data/
+*.safetensors
+*.jwk
+
+# Model cache
+models/
+hf_cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Temporary files
+*.tmp
+*.log
+

@@ -8,6 +8,24 @@ CryptoTensors is a secure tensor file format that extends [safetensors](https://
 pip install cryptotensors
 ```
 
+### Transparent Loading of Encrypted Models (Compatible Package)
+
+If you want to load encrypted CryptoTensors models without modifying your code, you can use the compatible package released on [GitHub Releases](https://github.com/aiyah-meloken/cryptotensors/releases):
+
+```bash
+# Uninstall the original safetensors package
+pip uninstall safetensors
+
+# Install the compatible package directly from GitHub release
+# Replace {tag} with the release tag (e.g., v0.1.0)
+pip install https://github.com/aiyah-meloken/cryptotensors/releases/download/{tag}/safetensors-0.7.0-py3-none-any.whl
+
+# Example for v0.1.0:
+# pip install https://github.com/aiyah-meloken/cryptotensors/releases/download/v0.1.0/safetensors-0.7.0-py3-none-any.whl
+```
+
+After installation, your existing code using `from safetensors import ...` will transparently support both regular safetensors files and encrypted CryptoTensors files without any code changes. The compatible package uses the `safetensors` namespace but internally depends on `cryptotensors`, enabling seamless encryption support.
+
 ## Usage
 
 ### Basic Usage (Safetensors Compatible)

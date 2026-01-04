@@ -62,7 +62,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "bindings/python"
+          workspaces: |
+            bindings/python
+            safetensors
 
       - name: Install Python
         uses: actions/setup-python@v5

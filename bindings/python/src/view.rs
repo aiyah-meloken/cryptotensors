@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use pyo3::types::PyDict;
 use pyo3::Bound as PyBound;
-use safetensors::{Dtype, View};
+use cryptotensors::{Dtype, View};
 use std::borrow::Cow;
 use std::collections::HashMap;
 

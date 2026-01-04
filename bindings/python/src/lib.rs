@@ -15,9 +15,9 @@ use pyo3::types::IntoPyDict;
 use pyo3::types::{PyBool, PyByteArray, PyBytes, PyDict, PyList, PySlice};
 use pyo3::Bound as PyBound;
 use pyo3::{intern, PyErr};
-use safetensors::slice::TensorIndexer;
-use safetensors::tensor::{Dtype, Metadata, SafeTensors, TensorInfo, TensorView};
-use safetensors::View;
+use cryptotensors::slice::TensorIndexer;
+use cryptotensors::tensor::{Dtype, Metadata, SafeTensors, TensorInfo, TensorView};
+use cryptotensors::View;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
@@ -27,10 +27,10 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 // MODIFIED: CryptoTensors imports for encryption/decryption support
-use safetensors::cryptotensors::{CryptoTensors, SerializeCryptoConfig};
-use safetensors::key::KeyMaterial;
-use safetensors::policy::AccessPolicy;
-use safetensors::registry::{self, load_provider_native, TempKeyProvider, PRIORITY_TEMP};
+use cryptotensors::cryptotensors::{CryptoTensors, SerializeCryptoConfig};
+use cryptotensors::key::KeyMaterial;
+use cryptotensors::policy::AccessPolicy;
+use cryptotensors::registry::{self, load_provider_native, TempKeyProvider, PRIORITY_TEMP};
 
 /// MODIFIED: Load a native provider from a shared library.
 #[pyfunction]
@@ -222,7 +222,7 @@ fn serialize<'b>(
 ) -> PyResult<PyBound<'b, PyBytes>> {
     let tensors = prepare(tensor_dict)?;
     let config = prepare_crypto(config)?;
-    let out = safetensors::tensor::serialize(&tensors, metadata, config.as_ref())
+    let out = cryptotensors::tensor::serialize(&tensors, metadata, config.as_ref())
         .map_err(|e| SafetensorError::new_err(format!("Error while serializing: {e}")))?;
     let pybytes = PyBytes::new(py, &out);
     Ok(pybytes)
@@ -257,7 +257,7 @@ fn serialize_file(
     let tensors = prepare(tensor_dict)?;
     let config = prepare_crypto(config)?;
 
-    safetensors::tensor::serialize_to_file(&tensors, metadata, filename.as_path(), config.as_ref())
+    cryptotensors::tensor::serialize_to_file(&tensors, metadata, filename.as_path(), config.as_ref())
         .map_err(|e| SafetensorError::new_err(format!("Error while serializing: {e}")))?;
 
     Ok(())
@@ -680,7 +680,7 @@ impl Open {
         let offset = n + 8;
 
         // MODIFIED: Parse crypto info from header (if encrypted file)
-        let crypto = safetensors::cryptotensors::CryptoTensors::from_header(&metadata)
+        let crypto = cryptotensors::cryptotensors::CryptoTensors::from_header(&metadata)
             .map_err(|e| SafetensorError::new_err(format!("Error parsing CryptoTensors: {e:?}")))?
             .map(Arc::new);
 

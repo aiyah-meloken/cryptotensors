@@ -1,9 +1,9 @@
 [project]
 name = 'cryptotensors'
 requires-python = '>=3.9'
-description = 'CryptoTensors: Safetensors with encryption support'
+description = 'CryptoTensors: Safetensors with encryption support for secure model distribution'
 authors = [
-    {name = 'Nicolas Patry', email = 'patry.nicolas@protonmail.com'}
+    {name = 'Aiyah Meloken', email = 'aiyah_meloken@protonmail.com'}
 ]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -27,8 +27,9 @@ dynamic = [
 ]
 
 [project.urls]
-Homepage = 'https://github.com/huggingface/safetensors'
-Source = 'https://github.com/huggingface/safetensors'
+Homepage = 'https://github.com/aiyah-meloken/cryptotensors'
+Source = 'https://github.com/aiyah-meloken/cryptotensors'
+Documentation = 'https://aiyah-meloken.github.io/cryptotensors/'
 
 [project.optional-dependencies]
 numpy = ["numpy>=1.21.6"]

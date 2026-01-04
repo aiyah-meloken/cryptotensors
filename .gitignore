@@ -7,5 +7,6 @@ bindings/python/Cargo.lock
 *.pt
 *.pdparams
 *.safetensors
+*.cryptotensors
 *.npz
 .DS_Store

@@ -28,8 +28,12 @@ def _find_provider_native_lib(name: str) -> str:
                 return module.get_native_lib_path()
             else:
                 # Fallback: assume the module itself is the path or has it
-                raise ValueError(f"Provider '{name}' module does not have get_native_lib_path()")
-    raise ValueError(f"Provider '{name}' not found. Install with: pip install cryptotensors-provider-{name}")
+                raise ValueError(
+                    f"Provider '{name}' module does not have get_native_lib_path()"
+                )
+    raise ValueError(
+        f"Provider '{name}' not found. Install with: pip install cryptotensors-provider-{name}"
+    )
 
 
 def init_key_provider(name: str, **config):

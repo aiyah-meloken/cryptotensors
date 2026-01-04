@@ -824,13 +824,40 @@ impl Open {
         })
     }
 
-    /// Return the special non tensor information in the header
+    /// Return the special non tensor information in the header (excluding keys starting with "__")
     ///
     /// Returns:
     ///     (`Dict[str, str]`):
     ///         The freeform metadata.
     pub fn metadata(&self) -> Option<HashMap<String, String>> {
-        self.metadata.metadata().clone()
+        self.metadata
+            .metadata()
+            .as_ref()
+            .map(|meta| {
+                meta.iter()
+                    .filter(|(k, _)| !k.starts_with("__"))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<HashMap<_, _>>()
+            })
+            .and_then(|meta| if meta.is_empty() { None } else { Some(meta) })
+    }
+
+    /// Return the reserved metadata fields (keys starting with "__") in the header
+    ///
+    /// Returns:
+    ///     (`Dict[str, str]`):
+    ///         The reserved metadata.
+    pub fn reserved_metadata(&self) -> Option<HashMap<String, String>> {
+        self.metadata
+            .metadata()
+            .as_ref()
+            .map(|meta| {
+                meta.iter()
+                    .filter(|(k, _)| k.starts_with("__"))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<HashMap<_, _>>()
+            })
+            .and_then(|meta| if meta.is_empty() { None } else { Some(meta) })
     }
 
     /// Returns the names of the tensors in the file.
@@ -1217,13 +1244,22 @@ impl safe_open {
         Ok(Self { inner })
     }
 
-    /// Return the special non tensor information in the header
+    /// Return the special non tensor information in the header (excluding keys starting with "__")
     ///
     /// Returns:
     ///     (`Dict[str, str]`):
     ///         The freeform metadata.
     pub fn metadata(&self) -> PyResult<Option<HashMap<String, String>>> {
         Ok(self.inner()?.metadata())
+    }
+
+    /// Return the reserved metadata fields (keys starting with "__") in the header
+    ///
+    /// Returns:
+    ///     (`Dict[str, str]`):
+    ///         The reserved metadata.
+    pub fn reserved_metadata(&self) -> PyResult<Option<HashMap<String, String>>> {
+        Ok(self.inner()?.reserved_metadata())
     }
 
     /// Returns the names of the tensors in the file.

@@ -82,9 +82,12 @@ class CryptoMlxTestCase(unittest.TestCase):
 
             with safe_open(f.name, framework="mlx") as handle:
                 metadata = handle.metadata()
+                reserved_metadata = handle.reserved_metadata()
                 import json
 
-                enc_info = json.loads(metadata.get("__encryption__", "{}"))
+                self.assertIsNone(metadata)
+                self.assertIsNotNone(reserved_metadata)
+                enc_info = json.loads(reserved_metadata.get("__encryption__", "{}"))
                 self.assertIn("test", enc_info)
                 self.assertNotIn("test2", enc_info)
 

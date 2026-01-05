@@ -140,11 +140,22 @@ class safe_open:
 
     def metadata(self):
         """
-        Return the special non tensor information in the header
+        Return the special non tensor information in the header, excluding reserved keys
+        that start with "__".
 
         Returns:
             (`Dict[str, str]`):
                 The freeform metadata.
+        """
+        pass
+
+    def reserved_metadata(self):
+        """
+        Return the reserved metadata fields in the header (keys starting with "__").
+
+        Returns:
+            (`Dict[str, str]`):
+                The reserved metadata.
         """
         pass
 

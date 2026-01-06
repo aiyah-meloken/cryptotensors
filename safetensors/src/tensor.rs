@@ -617,6 +617,36 @@ impl<'data> SafeTensors<'data> {
     pub fn is_empty(&self) -> bool {
         self.metadata.tensors.is_empty()
     }
+
+    /// Return the non-reserved metadata fields (keys NOT starting with "__") in the header.
+    /// This excludes reserved fields like "__encryption__", "__crypto_keys__", "__signature__", "__policy__", etc.
+    pub fn metadata(&self) -> Option<HashMap<String, String>> {
+        self.metadata
+            .metadata()
+            .as_ref()
+            .map(|meta| {
+                meta.iter()
+                    .filter(|(k, _)| !k.starts_with("__"))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<HashMap<_, _>>()
+            })
+            .and_then(|meta| if meta.is_empty() { None } else { Some(meta) })
+    }
+
+    /// Return the reserved metadata fields (keys starting with "__") in the header.
+    /// Reserved metadata includes fields like "__encryption__", "__crypto_keys__", "__signature__", "__policy__", etc.
+    pub fn reserved_metadata(&self) -> Option<HashMap<String, String>> {
+        self.metadata
+            .metadata()
+            .as_ref()
+            .map(|meta| {
+                meta.iter()
+                    .filter(|(k, _)| k.starts_with("__"))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<HashMap<_, _>>()
+            })
+            .and_then(|meta| if meta.is_empty() { None } else { Some(meta) })
+    }
 }
 
 /// The stuct representing the header of safetensor files which allow

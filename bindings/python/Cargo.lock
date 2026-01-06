@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "cryptotensors"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "hashbrown",
@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "cryptotensors-python"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cryptotensors",
  "memmap2",

@@ -35,8 +35,10 @@ use std::sync::{OnceLock, RwLock};
 const PROVIDER_PUBLIC_KEYS: &[(&str, &str)] = &[
     // KoalaVault vLLM Client provider
     // Ed25519 public key for verifying library signatures
-    ("koalavault-vllm", "vM5cRuHaIyKt3RAELcqc4+nXbSbCh53ABYt2/lOGqw8="),
-    
+    (
+        "koalavault-vllm",
+        "vM5cRuHaIyKt3RAELcqc4+nXbSbCh53ABYt2/lOGqw8=",
+    ),
     // Add more providers and their public keys here
     // ("aws-kms", "..."),
 ];
@@ -715,7 +717,8 @@ fn verify_library_signature(provider_name: &str, lib_path: &str) -> Result<(), C
     let mut lib_file = File::open(lib_path)
         .map_err(|e| CryptoTensorsError::Registry(format!("Failed to open library: {}", e)))?;
     let mut lib_data = Vec::new();
-    lib_file.read_to_end(&mut lib_data)
+    lib_file
+        .read_to_end(&mut lib_data)
         .map_err(|e| CryptoTensorsError::Registry(format!("Failed to read library: {}", e)))?;
 
     // Read signature file
@@ -727,20 +730,22 @@ fn verify_library_signature(provider_name: &str, lib_path: &str) -> Result<(), C
         )));
     }
 
-    let mut sig_file = File::open(&sig_path)
-        .map_err(|e| CryptoTensorsError::Registry(format!("Failed to open signature file: {}", e)))?;
+    let mut sig_file = File::open(&sig_path).map_err(|e| {
+        CryptoTensorsError::Registry(format!("Failed to open signature file: {}", e))
+    })?;
     let mut sig_base64 = String::new();
-    sig_file.read_to_string(&mut sig_base64)
+    sig_file
+        .read_to_string(&mut sig_base64)
         .map_err(|e| CryptoTensorsError::Registry(format!("Failed to read signature: {}", e)))?;
 
-    let signature = BASE64.decode(sig_base64.trim()).map_err(|e| {
-        CryptoTensorsError::Registry(format!("Invalid signature encoding: {}", e))
-    })?;
+    let signature = BASE64
+        .decode(sig_base64.trim())
+        .map_err(|e| CryptoTensorsError::Registry(format!("Invalid signature encoding: {}", e)))?;
 
     // Decode public key
-    let public_key_bytes = BASE64.decode(public_key_str).map_err(|e| {
-        CryptoTensorsError::Registry(format!("Invalid public key encoding: {}", e))
-    })?;
+    let public_key_bytes = BASE64
+        .decode(public_key_str)
+        .map_err(|e| CryptoTensorsError::Registry(format!("Invalid public key encoding: {}", e)))?;
 
     // Verify signature
     let peer_public_key = signature::UnparsedPublicKey::new(&signature::ED25519, public_key_bytes);

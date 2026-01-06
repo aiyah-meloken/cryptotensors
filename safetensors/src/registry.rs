@@ -22,8 +22,22 @@ use std::sync::{OnceLock, RwLock};
 
 /// Hardcoded public keys for verifying provider signatures (Ed25519, Base64)
 /// Each provider can have its own trusted public key.
+///
+/// To add a new provider:
+/// 1. Generate Ed25519 key pair using: python scripts/generate_signing_keys.py
+/// 2. Add the public key (base64) here with the provider name
+/// 3. Store the private key as a GitHub Secret (ED25519_SIGNING_KEY) in the provider's repo
+///
+/// The signature verification uses Ed25519 algorithm:
+/// - Library file (.so/.dylib/.pyd) is signed with the private key
+/// - Signature is stored in <library_file>.sig (base64 encoded)
+/// - This public key is used to verify the signature before loading the library
 const PROVIDER_PUBLIC_KEYS: &[(&str, &str)] = &[
-    // Add providers and their public keys here
+    // KoalaVault vLLM Client provider
+    // Ed25519 public key for verifying library signatures
+    ("koalavault-vllm", "vM5cRuHaIyKt3RAELcqc4+nXbSbCh53ABYt2/lOGqw8="),
+    
+    // Add more providers and their public keys here
     // ("aws-kms", "..."),
 ];
 

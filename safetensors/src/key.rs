@@ -293,14 +293,14 @@ impl KeyMaterial {
         if !self.alg.is_empty() {
             match self.key_type {
                 JwkKeyType::Oct => {
-                    if EncryptionAlgorithm::from_str(&self.alg).is_none() {
+                    if self.alg.parse::<EncryptionAlgorithm>().is_err() {
                         return Err(CryptoTensorsError::InvalidAlgorithm(
                             "Invalid encryption algorithm".to_string(),
                         ));
                     }
                 }
                 JwkKeyType::Okp => {
-                    if SignatureAlgorithm::from_str(&self.alg).is_none() {
+                    if self.alg.parse::<SignatureAlgorithm>().is_err() {
                         return Err(CryptoTensorsError::InvalidAlgorithm(
                             "Invalid signature algorithm".to_string(),
                         ));
@@ -330,8 +330,9 @@ impl KeyMaterial {
         jku: Option<String>,
     ) -> Result<Self, CryptoTensorsError> {
         let alg = alg.unwrap_or_else(|| "aes256gcm".to_string());
-        let enc_alg = EncryptionAlgorithm::from_str(&alg)
-            .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(alg.clone()))?;
+        let enc_alg = alg
+            .parse::<EncryptionAlgorithm>()
+            .map_err(|_| CryptoTensorsError::InvalidAlgorithm(alg.clone()))?;
         let key_bytes = if let Some(ref b64_str) = key_b64 {
             let bytes = BASE64.decode(b64_str).map_err(|e| {
                 CryptoTensorsError::InvalidKey(format!("Invalid base64 key: {}", e))
@@ -374,8 +375,9 @@ impl KeyMaterial {
         jku: Option<String>,
     ) -> Result<Self, CryptoTensorsError> {
         let alg = alg.unwrap_or_else(|| "ed25519".to_string());
-        let sig_alg = SignatureAlgorithm::from_str(&alg)
-            .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(alg.clone()))?;
+        let sig_alg = alg
+            .parse::<SignatureAlgorithm>()
+            .map_err(|_| CryptoTensorsError::InvalidAlgorithm(alg.clone()))?;
         match sig_alg {
             SignatureAlgorithm::Ed25519 => {
                 let public = if let Some(pub_b64) = public_b64 {
@@ -582,10 +584,7 @@ impl KeyMaterial {
     /// # Returns
     /// * `Ok(KeyMaterial)` - Successfully created key material
     /// * `Err(CryptoTensorsError)` - If parsing fails
-    pub fn from_jwk_str(
-        jwk_json: &str,
-        is_for_save: bool,
-    ) -> Result<Self, CryptoTensorsError> {
+    pub fn from_jwk_str(jwk_json: &str, is_for_save: bool) -> Result<Self, CryptoTensorsError> {
         let jwk_value: serde_json::Value = serde_json::from_str(jwk_json)
             .map_err(|e| CryptoTensorsError::InvalidKey(format!("Invalid JSON: {}", e)))?;
         Self::from_jwk(&jwk_value, is_for_save)
@@ -626,12 +625,8 @@ pub enum KeyRole {
 impl KeyRole {
     fn missing_key_message(&self) -> &'static str {
         match self {
-            KeyRole::Master => {
-                "encryption key required: provide enc_key or use registry (enc_kid)"
-            }
-            KeyRole::Signing => {
-                "signing key required: provide sign_key or use registry (sign_kid)"
-            }
+            KeyRole::Master => "encryption key required: provide enc_key or use registry (enc_kid)",
+            KeyRole::Signing => "signing key required: provide sign_key or use registry (sign_kid)",
             KeyRole::Verify => {
                 "verification key required: provide sign_key or use registry (sign_kid)"
             }
@@ -669,7 +664,9 @@ pub fn resolve_key(
             KeyRole::Verify => registry::get_verify_key(params.jku, params.kid)?,
         }
     } else {
-        return Err(CryptoTensorsError::KeyLoad(role.missing_key_message().to_string()));
+        return Err(CryptoTensorsError::KeyLoad(
+            role.missing_key_message().to_string(),
+        ));
     };
     KeyMaterial::from_jwk(&jwk, for_creation)
 }

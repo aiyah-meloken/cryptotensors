@@ -7,6 +7,8 @@
 use crate::cryptotensors::CryptoTensorsError;
 use ring::signature;
 use ring::signature::{Ed25519KeyPair, UnparsedPublicKey};
+use std::fmt;
+use std::str::FromStr;
 
 /// Supported signature algorithms for header signing
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,20 +17,23 @@ pub enum SignatureAlgorithm {
     Ed25519,
 }
 
-impl SignatureAlgorithm {
-    /// Convert a string representation to a signature algorithm
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for SignatureAlgorithm {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_uppercase().as_str() {
-            "ED25519" => Some(SignatureAlgorithm::Ed25519),
-            _ => None,
+            "ED25519" => Ok(SignatureAlgorithm::Ed25519),
+            _ => Err(()),
         }
     }
+}
 
-    /// Convert the signature algorithm to its string representation
-    pub fn to_string(&self) -> String {
-        match self {
-            SignatureAlgorithm::Ed25519 => "ED25519".to_string(),
-        }
+impl fmt::Display for SignatureAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            SignatureAlgorithm::Ed25519 => "ED25519",
+        };
+        write!(f, "{}", s)
     }
 }
 
@@ -50,8 +55,9 @@ pub fn sign_data(data: &[u8], key: &[u8], algo_name: &str) -> Result<Vec<u8>, Cr
         return Err(CryptoTensorsError::MissingSigningKey);
     }
 
-    let algo = SignatureAlgorithm::from_str(algo_name)
-        .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
+    let algo = algo_name
+        .parse::<SignatureAlgorithm>()
+        .map_err(|_| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
 
     match algo {
         SignatureAlgorithm::Ed25519 => {
@@ -90,8 +96,9 @@ pub fn verify_signature(
         return Err(CryptoTensorsError::MissingVerificationKey);
     }
 
-    let algo = SignatureAlgorithm::from_str(algo_name)
-        .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
+    let algo = algo_name
+        .parse::<SignatureAlgorithm>()
+        .map_err(|_| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
 
     match algo {
         SignatureAlgorithm::Ed25519 => {

@@ -7,6 +7,8 @@
 use crate::cryptotensors::CryptoTensorsError;
 use ring::rand::SecureRandom;
 use ring::{aead, rand};
+use std::fmt;
+use std::str::FromStr;
 
 /// Supported encryption algorithms for tensor data encryption
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,26 +21,32 @@ pub enum EncryptionAlgorithm {
     ChaCha20Poly1305,
 }
 
-impl EncryptionAlgorithm {
-    /// Convert a string representation to an encryption algorithm
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for EncryptionAlgorithm {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let normalized = s.replace('-', "").to_lowercase();
         match normalized.as_str() {
-            "aes128gcm" => Some(EncryptionAlgorithm::Aes128Gcm),
-            "aes256gcm" => Some(EncryptionAlgorithm::Aes256Gcm),
-            "chacha20poly1305" => Some(EncryptionAlgorithm::ChaCha20Poly1305),
-            _ => None,
+            "aes128gcm" => Ok(EncryptionAlgorithm::Aes128Gcm),
+            "aes256gcm" => Ok(EncryptionAlgorithm::Aes256Gcm),
+            "chacha20poly1305" => Ok(EncryptionAlgorithm::ChaCha20Poly1305),
+            _ => Err(()),
         }
     }
+}
 
-    /// Convert the encryption algorithm to its string representation
-    pub fn to_string(&self) -> String {
-        match self {
-            EncryptionAlgorithm::Aes128Gcm => "aes128gcm".to_string(),
-            EncryptionAlgorithm::Aes256Gcm => "aes256gcm".to_string(),
-            EncryptionAlgorithm::ChaCha20Poly1305 => "chacha20poly1305".to_string(),
-        }
+impl fmt::Display for EncryptionAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            EncryptionAlgorithm::Aes128Gcm => "aes128gcm",
+            EncryptionAlgorithm::Aes256Gcm => "aes256gcm",
+            EncryptionAlgorithm::ChaCha20Poly1305 => "chacha20poly1305",
+        };
+        write!(f, "{}", s)
     }
+}
+
+impl EncryptionAlgorithm {
 
     /// Get the appropriate AEAD algorithm from the ring crate
     pub fn get_aead_algo(&self) -> &'static aead::Algorithm {
@@ -93,7 +101,7 @@ impl EncryptionAlgorithm {
 /// # Arguments
 ///
 /// * `in_out` - The buffer containing the data to encrypt. The encrypted data will be
-///              written back to this buffer.
+///   written back to this buffer.
 /// * `key` - The encryption key to use
 /// * `algo_name` - The name of the encryption algorithm to use
 ///
@@ -120,8 +128,9 @@ pub fn encrypt_data(
     }
 
     // Validate inputs
-    let algo = EncryptionAlgorithm::from_str(algo_name)
-        .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
+    let algo = algo_name
+        .parse::<EncryptionAlgorithm>()
+        .map_err(|_| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
 
     if key.is_empty() {
         return Err(CryptoTensorsError::InvalidKeyLength {
@@ -166,7 +175,7 @@ pub fn encrypt_data(
 /// # Arguments
 ///
 /// * `in_out` - The buffer containing the encrypted data. The decrypted data will be
-///              written back to this buffer.
+///   written back to this buffer.
 /// * `key` - The decryption key to use
 /// * `algo_name` - The name of the encryption algorithm that was used
 /// * `iv` - The nonce (IV) used during encryption
@@ -198,8 +207,9 @@ pub fn decrypt_data(
     }
 
     // Validate inputs
-    let algo = EncryptionAlgorithm::from_str(algo_name)
-        .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
+    let algo = algo_name
+        .parse::<EncryptionAlgorithm>()
+        .map_err(|_| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
 
     if key.is_empty() {
         return Err(CryptoTensorsError::InvalidKeyLength {

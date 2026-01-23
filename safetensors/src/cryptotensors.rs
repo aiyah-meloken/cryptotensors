@@ -5,7 +5,7 @@
 // This file is NEW and was not present in the original safetensors project.
 
 use crate::encryption::{decrypt_data, encrypt_data, EncryptionAlgorithm};
-use crate::key::{KeyLookupParams, KeyMaterial, KeyRole, ValidateMode, resolve_key};
+use crate::key::{resolve_key, KeyLookupParams, KeyMaterial, KeyRole, ValidateMode};
 use crate::policy::AccessPolicy;
 use crate::signing::{sign_data, verify_signature, SignatureAlgorithm};
 use crate::tensor::{Metadata, TensorInfo};
@@ -223,6 +223,7 @@ mod cryptor_serde {
 ///
 /// Key loading: (1) Direct keys (`enc_key`/`sign_key`) — use as-is, ignore kid/jku.
 /// (2) Registry — when no direct keys, use `enc_kid`/`enc_jku`/`sign_kid`/`sign_jku` to lookup.
+#[derive(Default)]
 pub struct SerializeCryptoConfig {
     /// Directly provided encryption key. When set, enc_kid/enc_jku are ignored.
     pub enc_key: Option<KeyMaterial>,
@@ -300,24 +301,11 @@ impl SerializeCryptoConfig {
     }
 }
 
-impl Default for SerializeCryptoConfig {
-    fn default() -> Self {
-        Self {
-            enc_key: None,
-            sign_key: None,
-            enc_kid: None,
-            enc_jku: None,
-            sign_kid: None,
-            sign_jku: None,
-            policy: None,
-            tensor_filter: None,
-        }
-    }
-}
 
 /// Configuration for deserialization (optional)
 ///
 /// Key loading: (1) Direct keys — use as-is. (2) Registry — when no direct keys, lookup by kid/jku from header.
+#[derive(Default)]
 pub struct DeserializeCryptoConfig {
     /// Directly provided encryption key. When set, registry is not used.
     pub enc_key: Option<KeyMaterial>,
@@ -339,17 +327,8 @@ impl DeserializeCryptoConfig {
         config.sign_key = Some(sign_key);
         config
     }
-
 }
 
-impl Default for DeserializeCryptoConfig {
-    fn default() -> Self {
-        Self {
-            enc_key: None,
-            sign_key: None,
-        }
-    }
-}
 
 #[derive(Clone, Copy)]
 enum SerializeKeyKind {
@@ -407,8 +386,10 @@ impl<'data> SingleCryptor<'data> {
     /// * `Ok(Self)` - If the key material contains valid encryption key
     /// * `Err(CryptoTensorsError)` - If the key material is invalid or missing required key
     fn new(key_material: &KeyMaterial) -> Result<Self, CryptoTensorsError> {
-        let alg = EncryptionAlgorithm::from_str(&key_material.alg)
-            .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(key_material.alg.clone()))?;
+        let alg = key_material
+            .alg
+            .parse::<EncryptionAlgorithm>()
+            .map_err(|_| CryptoTensorsError::InvalidAlgorithm(key_material.alg.clone()))?;
         let master_key = key_material.get_master_key_bytes()?;
 
         Ok(Self {
@@ -436,8 +417,10 @@ impl<'data> SingleCryptor<'data> {
     /// * `InvalidAlgorithm` - If the algorithm name is not supported
     /// * `RandomGeneration` - If random number generation fails
     fn random_key(&self) -> Result<Vec<u8>, CryptoTensorsError> {
-        let algo = EncryptionAlgorithm::from_str(&self.enc_algo)
-            .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(self.enc_algo.clone()))?;
+        let algo = self
+            .enc_algo
+            .parse::<EncryptionAlgorithm>()
+            .map_err(|_| CryptoTensorsError::InvalidAlgorithm(self.enc_algo.clone()))?;
 
         let mut key = vec![0u8; algo.key_len()];
         let rng = rand::SystemRandom::new();
@@ -494,7 +477,7 @@ impl<'data> SingleCryptor<'data> {
 
         let mut data_key =
             BASE64
-                .decode(&self.wrapped_key.get().ok_or_else(|| {
+                .decode(self.wrapped_key.get().ok_or_else(|| {
                     CryptoTensorsError::KeyUnwrap("wrapped_key is empty".to_string())
                 })?)
                 .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
@@ -504,7 +487,7 @@ impl<'data> SingleCryptor<'data> {
             &self.enc_algo,
             BASE64
                 .decode(
-                    &self.key_iv.get().ok_or_else(|| {
+                    self.key_iv.get().ok_or_else(|| {
                         CryptoTensorsError::KeyUnwrap("key_iv is empty".to_string())
                     })?,
                 )
@@ -512,7 +495,7 @@ impl<'data> SingleCryptor<'data> {
                 .as_slice(),
             BASE64
                 .decode(
-                    &self.key_tag.get().ok_or_else(|| {
+                    self.key_tag.get().ok_or_else(|| {
                         CryptoTensorsError::KeyUnwrap("key_tag is empty".to_string())
                     })?,
                 )
@@ -548,13 +531,13 @@ impl<'data> SingleCryptor<'data> {
                     data_key.as_slice(),
                     &self.enc_algo,
                     BASE64
-                        .decode(&self.iv.get().ok_or_else(|| {
+                        .decode(self.iv.get().ok_or_else(|| {
                             CryptoTensorsError::KeyUnwrap("iv is empty".to_string())
                         })?)
                         .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
                         .as_slice(),
                     BASE64
-                        .decode(&self.tag.get().ok_or_else(|| {
+                        .decode(self.tag.get().ok_or_else(|| {
                             CryptoTensorsError::KeyUnwrap("tag is empty".to_string())
                         })?)
                         .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
@@ -667,8 +650,8 @@ impl<'data> SingleCryptor<'data> {
             wrapped_key: OnceCell::new(),
             key_iv: OnceCell::new(),
             key_tag: OnceCell::new(),
-            iv: self.iv.clone(),  // Preserve data encryption IV (if set)
-            tag: self.tag.clone(), // Preserve data encryption tag (if set)
+            iv: self.iv.clone(),     // Preserve data encryption IV (if set)
+            tag: self.tag.clone(),   // Preserve data encryption tag (if set)
             buffer: OnceCell::new(), // Clear buffer (master_key changed)
             master_key: new_master_key,
             _phantom: std::marker::PhantomData,
@@ -676,13 +659,15 @@ impl<'data> SingleCryptor<'data> {
 
         // If re-wrapped, set new encrypted fields
         if let (Some(wk), Some(kiv), Some(ktag)) = (new_wrapped_key, new_key_iv, new_key_tag) {
-            new_cryptor.wrapped_key
-                .set(wk)
-                .map_err(|_| CryptoTensorsError::Encryption("Failed to set wrapped key".to_string()))?;
-            new_cryptor.key_iv
+            new_cryptor.wrapped_key.set(wk).map_err(|_| {
+                CryptoTensorsError::Encryption("Failed to set wrapped key".to_string())
+            })?;
+            new_cryptor
+                .key_iv
                 .set(kiv)
                 .map_err(|_| CryptoTensorsError::Encryption("Failed to set key iv".to_string()))?;
-            new_cryptor.key_tag
+            new_cryptor
+                .key_tag
                 .set(ktag)
                 .map_err(|_| CryptoTensorsError::Encryption("Failed to set key tag".to_string()))?;
         }
@@ -733,8 +718,10 @@ impl HeaderSigner {
     /// * `Ok(Self)` - If the key material contains valid signing keys
     /// * `Err(CryptoTensorsError)` - If the key material is invalid or missing required keys
     fn new(key_material: &KeyMaterial) -> Result<Self, CryptoTensorsError> {
-        let alg = SignatureAlgorithm::from_str(&key_material.alg)
-            .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(key_material.alg.clone()))?;
+        let alg = key_material
+            .alg
+            .parse::<SignatureAlgorithm>()
+            .map_err(|_| CryptoTensorsError::InvalidAlgorithm(key_material.alg.clone()))?;
 
         let priv_key = key_material
             .d_priv
@@ -1307,13 +1294,12 @@ impl<'data> CryptoTensors<'data> {
     /// let new_config = SerializeCryptoConfig::with_kids("new-enc", "new-sign");
     /// // cryptotensors.rewrap(None, &new_config)?;
     /// ```
-    pub fn rewrap(
-        &mut self,
-        new_config: &SerializeCryptoConfig,
-    ) -> Result<(), CryptoTensorsError> {
+    pub fn rewrap(&mut self, new_config: &SerializeCryptoConfig) -> Result<(), CryptoTensorsError> {
         // 1. Resolve new encryption and signing keys
-        let new_enc_key = Self::resolve_key_from_serialize_config(new_config, SerializeKeyKind::Enc)?;
-        let new_sign_key = Self::resolve_key_from_serialize_config(new_config, SerializeKeyKind::Sign)?;
+        let new_enc_key =
+            Self::resolve_key_from_serialize_config(new_config, SerializeKeyKind::Enc)?;
+        let new_sign_key =
+            Self::resolve_key_from_serialize_config(new_config, SerializeKeyKind::Sign)?;
 
         new_enc_key.validate(ValidateMode::ForCreation)?;
         new_sign_key.validate(ValidateMode::ForCreation)?;
@@ -1321,8 +1307,9 @@ impl<'data> CryptoTensors<'data> {
         // 3. Rewrap each cryptor's DEK using with_new_key
         let cryptor_names: Vec<String> = self.cryptors.keys().cloned().collect();
         for name in cryptor_names {
-            let old_cryptor = self.cryptors.get(&name)
-                .ok_or_else(|| CryptoTensorsError::KeyUnwrap(format!("Cryptor {} not found", name)))?;
+            let old_cryptor = self.cryptors.get(&name).ok_or_else(|| {
+                CryptoTensorsError::KeyUnwrap(format!("Cryptor {} not found", name))
+            })?;
             let new_cryptor = old_cryptor.with_new_key(&new_enc_key)?;
             self.cryptors.insert(name, new_cryptor);
         }

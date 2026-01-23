@@ -50,22 +50,24 @@ fn disable_provider(name: &str) -> PyResult<()> {
 #[pyfunction]
 fn _register_key_provider_internal(keys: Vec<PyBound<PyAny>>) -> PyResult<()> {
     let mut provider = DirectKeyProvider::new();
-    
+
     // Parse keys and add to provider
     for key in keys {
         let json_key = pyany_to_json(&key)?;
-        
+
         // Determine key type and add appropriately
-        let kty = json_key.get("kty")
+        let kty = json_key
+            .get("kty")
             .and_then(|v| v.as_str())
             .ok_or_else(|| SafetensorError::new_err("Missing 'kty' in key"))?
             .to_string();
-        
-        let kid = json_key.get("kid")
+
+        let kid = json_key
+            .get("kid")
             .and_then(|v| v.as_str())
             .ok_or_else(|| SafetensorError::new_err("Missing 'kid' in key"))?
             .to_string();
-        
+
         match kty.as_str() {
             "oct" => {
                 provider.add_enc_key(&kid, json_key);
@@ -74,7 +76,10 @@ fn _register_key_provider_internal(keys: Vec<PyBound<PyAny>>) -> PyResult<()> {
                 provider.add_sign_key(&kid, json_key);
             }
             _ => {
-                return Err(SafetensorError::new_err(format!("Unsupported key type: {}", kty)));
+                return Err(SafetensorError::new_err(format!(
+                    "Unsupported key type: {}",
+                    kty
+                )));
             }
         }
     }
@@ -317,25 +322,24 @@ fn rewrap_file(
     new_config: PyBound<PyAny>,
     old_config: Option<PyBound<PyAny>>,
 ) -> PyResult<()> {
-    use cryptotensors::{rewrap_file as rewrap_file_impl, DeserializeCryptoConfig, SerializeCryptoConfig};
-    
+    use cryptotensors::{
+        rewrap_file as rewrap_file_impl, DeserializeCryptoConfig, SerializeCryptoConfig,
+    };
+
     // Prepare configs
     let old_deser_config = if let Some(cfg) = old_config.as_ref() {
         prepare_deserialize_crypto(cfg)?
     } else {
         None
     };
-    
+
     let new_ser_config = prepare_crypto(Some(new_config))?
         .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
-    
+
     // Call safetensors crate function
-    rewrap_file_impl(
-        &filename,
-        old_deser_config.as_ref(),
-        &new_ser_config,
-    ).map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
-    
+    rewrap_file_impl(&filename, old_deser_config.as_ref(), &new_ser_config)
+        .map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
+
     Ok(())
 }
 
@@ -364,25 +368,24 @@ fn rewrap_header(
     new_config: PyBound<PyAny>,
     old_config: Option<PyBound<PyAny>>,
 ) -> PyResult<Vec<u8>> {
-    use cryptotensors::{rewrap_header as rewrap_header_impl, DeserializeCryptoConfig, SerializeCryptoConfig};
-    
+    use cryptotensors::{
+        rewrap_header as rewrap_header_impl, DeserializeCryptoConfig, SerializeCryptoConfig,
+    };
+
     // Prepare configs
     let old_deser_config = if let Some(cfg) = old_config.as_ref() {
         prepare_deserialize_crypto(cfg)?
     } else {
         None
     };
-    
+
     let new_ser_config = prepare_crypto(Some(new_config))?
         .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
-    
+
     // Call safetensors crate function
-    let result = rewrap_header_impl(
-        buffer,
-        old_deser_config.as_ref(),
-        &new_ser_config,
-    ).map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
-    
+    let result = rewrap_header_impl(buffer, old_deser_config.as_ref(), &new_ser_config)
+        .map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
+
     Ok(result)
 }
 
@@ -412,55 +415,54 @@ fn rewrap(
     old_config: Option<PyBound<PyAny>>,
 ) -> PyResult<Vec<u8>> {
     use cryptotensors::{rewrap as rewrap_impl, DeserializeCryptoConfig, SerializeCryptoConfig};
-    
+
     // Prepare configs
     let old_deser_config = if let Some(cfg) = old_config.as_ref() {
         prepare_deserialize_crypto(cfg)?
     } else {
         None
     };
-    
+
     let new_ser_config = prepare_crypto(Some(new_config))?
         .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
-    
+
     // Call safetensors crate function
-    let result = rewrap_impl(
-        buffer,
-        old_deser_config.as_ref(),
-        &new_ser_config,
-    ).map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
-    
+    let result = rewrap_impl(buffer, old_deser_config.as_ref(), &new_ser_config)
+        .map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
+
     Ok(result)
 }
 
 /// Parse Python dict to DeserializeCryptoConfig
-fn prepare_deserialize_crypto(config: &PyBound<PyAny>) -> PyResult<Option<DeserializeCryptoConfig>> {
+fn prepare_deserialize_crypto(
+    config: &PyBound<PyAny>,
+) -> PyResult<Option<DeserializeCryptoConfig>> {
     if config.is_instance_of::<pyo3::types::PyNone>() {
         return Ok(None);
     }
     let config_dict = config.downcast::<PyDict>()?;
-    
+
     let mut deser_config = DeserializeCryptoConfig::new();
-    
+
     // Direct keys
     if let Some(enc_key_any) = config_dict.get_item("enc_key")? {
         let enc_key_dict = enc_key_any.downcast::<PyDict>()?;
         let enc_key = pykeymaterial_from_dict("enc", enc_key_dict)?;
         deser_config.enc_key = Some(enc_key);
     }
-    
+
     if let Some(sign_key_any) = config_dict.get_item("sign_key")? {
         let sign_key_dict = sign_key_any.downcast::<PyDict>()?;
         let sign_key = pykeymaterial_from_dict("sign", sign_key_dict)?;
         deser_config.sign_key = Some(sign_key);
     }
-    
+
     // Key loading order:
     // 1. Direct keys (enc_key/sign_key) - if provided, use as-is and ignore kid/jku from header
     // 2. Registry - when no direct keys, lookup by kid/jku from header
     //    Registry supports multiple KeyProvider types (DirectKeyProvider, EnvKeyProvider, FileKeyProvider, NativeKeyProvider, etc.)
     //    Python's register_direct_key_provider() only registers DirectKeyProvider; other providers are registered via Rust API or auto-registered
-    
+
     Ok(Some(deser_config))
 }
 
@@ -481,7 +483,7 @@ fn prepare_crypto(config: Option<PyBound<PyAny>>) -> PyResult<Option<SerializeCr
     // 2. Registry - when no direct keys, lookup by enc_kid/enc_jku/sign_kid/sign_jku
     //    Registry supports multiple KeyProvider types (DirectKeyProvider, EnvKeyProvider, FileKeyProvider, NativeKeyProvider, etc.)
     //    Python's register_direct_key_provider() only registers DirectKeyProvider; other providers are registered via Rust API or auto-registered
-    
+
     // Method 1: Direct keys (enc_key and sign_key)
     if let Some(enc_key_any) = config_dict.get_item("enc_key")? {
         let enc_key_dict = enc_key_any.downcast::<PyDict>()?;

@@ -127,7 +127,7 @@ impl FileJwkPath {
                     // Unix absolute path
                     rest.to_string()
                 }
-            } else if rest.starts_with('~') {
+            } else if let Some(stripped) = rest.strip_prefix('~') {
                 // Handle home directory expansion
                 let home = if cfg!(windows) {
                     std::env::var("USERPROFILE")
@@ -143,7 +143,7 @@ impl FileJwkPath {
                         CryptoTensorsError::KeyLoad(format!("Failed to get HOME: {}", e))
                     })?
                 };
-                format!("{}{}", home, &rest[1..])
+                format!("{}{}", home, stripped)
             } else {
                 // Relative path: return as-is, will be resolved against search paths
                 rest.to_string()
@@ -392,11 +392,9 @@ impl KeyProvider for DirectKeyProvider {
         kid: Option<&str>,
     ) -> Result<Value, CryptoTensorsError> {
         // Use specified kid or default kid
-        let kid = kid
-            .or(self.default_enc_kid.as_deref())
-            .ok_or_else(|| {
-                CryptoTensorsError::InvalidKey("No enc_kid specified and no default".to_string())
-            })?;
+        let kid = kid.or(self.default_enc_kid.as_deref()).ok_or_else(|| {
+            CryptoTensorsError::InvalidKey("No enc_kid specified and no default".to_string())
+        })?;
 
         self.enc_keys
             .get(kid)
@@ -409,11 +407,9 @@ impl KeyProvider for DirectKeyProvider {
         _jku: Option<&str>,
         kid: Option<&str>,
     ) -> Result<Value, CryptoTensorsError> {
-        let kid = kid
-            .or(self.default_sign_kid.as_deref())
-            .ok_or_else(|| {
-                CryptoTensorsError::InvalidKey("No sign_kid specified and no default".to_string())
-            })?;
+        let kid = kid.or(self.default_sign_kid.as_deref()).ok_or_else(|| {
+            CryptoTensorsError::InvalidKey("No sign_kid specified and no default".to_string())
+        })?;
 
         // Return signing key (should contain public key)
         self.sign_keys
@@ -427,11 +423,9 @@ impl KeyProvider for DirectKeyProvider {
         _jku: Option<&str>,
         kid: Option<&str>,
     ) -> Result<Value, CryptoTensorsError> {
-        let kid = kid
-            .or(self.default_sign_kid.as_deref())
-            .ok_or_else(|| {
-                CryptoTensorsError::InvalidKey("No sign_kid specified and no default".to_string())
-            })?;
+        let kid = kid.or(self.default_sign_kid.as_deref()).ok_or_else(|| {
+            CryptoTensorsError::InvalidKey("No sign_kid specified and no default".to_string())
+        })?;
 
         // Return signing key (should contain private key d)
         self.sign_keys
@@ -485,7 +479,7 @@ impl FileKeyProvider {
 
     /// Normalize a path (expand ~, convert to absolute if relative)
     fn normalize_path(path: &str) -> String {
-        let expanded = if path.starts_with('~') {
+        let expanded = if let Some(stripped) = path.strip_prefix('~') {
             let home = if cfg!(windows) {
                 std::env::var("USERPROFILE")
                     .or_else(|_| std::env::var("HOME"))
@@ -493,7 +487,7 @@ impl FileKeyProvider {
             } else {
                 std::env::var("HOME").unwrap_or_else(|_| "~".to_string())
             };
-            format!("{}{}", home, &path[1..])
+            format!("{}{}", home, stripped)
         } else {
             path.to_string()
         };
@@ -640,6 +634,13 @@ pub struct EnvKeyProvider {
 }
 
 #[cfg(feature = "provider-env")]
+impl Default for EnvKeyProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "provider-env")]
 impl EnvKeyProvider {
     /// Create a new environment-based key provider using default variable
     pub fn new() -> Self {
@@ -705,7 +706,6 @@ impl KeyProvider for EnvKeyProvider {
     }
 }
 
-
 // ============================================================================
 // Global Registry
 // ============================================================================
@@ -764,23 +764,22 @@ static PROVIDERS: OnceLock<RwLock<Vec<ProviderEntry>>> = OnceLock::new();
 
 fn get_providers() -> &'static RwLock<Vec<ProviderEntry>> {
     PROVIDERS.get_or_init(|| {
-        let mut entries = Vec::new();
-
-        #[cfg(feature = "provider-env")]
-        entries.push(ProviderEntry {
-            provider: Box::new(EnvKeyProvider::new()),
-            priority: PRIORITY_ENV,
-            enabled: true,
-            _lib: None,
-        });
-
-        #[cfg(feature = "provider-file")]
-        entries.push(ProviderEntry {
-            provider: Box::new(FileKeyProvider::new(Vec::new())),
-            priority: PRIORITY_FILE,
-            enabled: true,
-            _lib: None,
-        });
+        let entries = vec![
+            #[cfg(feature = "provider-env")]
+            ProviderEntry {
+                provider: Box::new(EnvKeyProvider::new()),
+                priority: PRIORITY_ENV,
+                enabled: true,
+                _lib: None,
+            },
+            #[cfg(feature = "provider-file")]
+            ProviderEntry {
+                provider: Box::new(FileKeyProvider::new(Vec::new())),
+                priority: PRIORITY_FILE,
+                enabled: true,
+                _lib: None,
+            },
+        ];
 
         RwLock::new(entries)
     })
@@ -1109,12 +1108,16 @@ mod tests {
     #[test]
     fn test_direct_key_provider_single_keys() {
         // Create encryption and signing keys
-        let enc_key = KeyMaterial::new_enc_key(None, None, Some("test-enc".to_string()), None).unwrap();
-        let sign_key = KeyMaterial::new_sign_key(None, None, None, Some("test-sign".to_string()), None).unwrap();
+        let enc_key =
+            KeyMaterial::new_enc_key(None, None, Some("test-enc".to_string()), None).unwrap();
+        let sign_key =
+            KeyMaterial::new_sign_key(None, None, None, Some("test-sign".to_string()), None)
+                .unwrap();
 
         // Convert to JWK values
         let enc_jwk: serde_json::Value = serde_json::from_str(&enc_key.to_jwk().unwrap()).unwrap();
-        let sign_jwk: serde_json::Value = serde_json::from_str(&sign_key.to_jwk().unwrap()).unwrap();
+        let sign_jwk: serde_json::Value =
+            serde_json::from_str(&sign_key.to_jwk().unwrap()).unwrap();
 
         // Create provider
         let provider = DirectKeyProvider::from_single_keys(enc_jwk.clone(), sign_jwk.clone());
@@ -1125,10 +1128,16 @@ mod tests {
 
         // Get keys
         let retrieved_enc = provider.get_master_key(None, Some("test-enc")).unwrap();
-        assert_eq!(retrieved_enc.get("kid").and_then(|v| v.as_str()), Some("test-enc"));
+        assert_eq!(
+            retrieved_enc.get("kid").and_then(|v| v.as_str()),
+            Some("test-enc")
+        );
 
         let retrieved_sign = provider.get_signing_key(None, Some("test-sign")).unwrap();
-        assert_eq!(retrieved_sign.get("kid").and_then(|v| v.as_str()), Some("test-sign"));
+        assert_eq!(
+            retrieved_sign.get("kid").and_then(|v| v.as_str()),
+            Some("test-sign")
+        );
     }
 
     #[test]
@@ -1136,39 +1145,73 @@ mod tests {
         let mut provider = DirectKeyProvider::new();
 
         // Create multiple keys
-        let enc1 = KeyMaterial::new_enc_key(None, None, Some("user1-enc".to_string()), None).unwrap();
-        let enc2 = KeyMaterial::new_enc_key(None, None, Some("user2-enc".to_string()), None).unwrap();
-        let sign1 = KeyMaterial::new_sign_key(None, None, None, Some("user1-sign".to_string()), None).unwrap();
-        let sign2 = KeyMaterial::new_sign_key(None, None, None, Some("user2-sign".to_string()), None).unwrap();
+        let enc1 =
+            KeyMaterial::new_enc_key(None, None, Some("user1-enc".to_string()), None).unwrap();
+        let enc2 =
+            KeyMaterial::new_enc_key(None, None, Some("user2-enc".to_string()), None).unwrap();
+        let sign1 =
+            KeyMaterial::new_sign_key(None, None, None, Some("user1-sign".to_string()), None)
+                .unwrap();
+        let sign2 =
+            KeyMaterial::new_sign_key(None, None, None, Some("user2-sign".to_string()), None)
+                .unwrap();
 
         // Add keys
         provider
-            .add_enc_key("user1-enc", serde_json::from_str(&enc1.to_jwk().unwrap()).unwrap())
-            .add_enc_key("user2-enc", serde_json::from_str(&enc2.to_jwk().unwrap()).unwrap())
-            .add_sign_key("user1-sign", serde_json::from_str(&sign1.to_jwk().unwrap()).unwrap())
-            .add_sign_key("user2-sign", serde_json::from_str(&sign2.to_jwk().unwrap()).unwrap());
+            .add_enc_key(
+                "user1-enc",
+                serde_json::from_str(&enc1.to_jwk().unwrap()).unwrap(),
+            )
+            .add_enc_key(
+                "user2-enc",
+                serde_json::from_str(&enc2.to_jwk().unwrap()).unwrap(),
+            )
+            .add_sign_key(
+                "user1-sign",
+                serde_json::from_str(&sign1.to_jwk().unwrap()).unwrap(),
+            )
+            .add_sign_key(
+                "user2-sign",
+                serde_json::from_str(&sign2.to_jwk().unwrap()).unwrap(),
+            );
 
         assert!(provider.is_ready());
 
         // Test retrieval
         let user1_enc = provider.get_master_key(None, Some("user1-enc")).unwrap();
-        assert_eq!(user1_enc.get("kid").and_then(|v| v.as_str()), Some("user1-enc"));
+        assert_eq!(
+            user1_enc.get("kid").and_then(|v| v.as_str()),
+            Some("user1-enc")
+        );
 
         let user2_sign = provider.get_signing_key(None, Some("user2-sign")).unwrap();
-        assert_eq!(user2_sign.get("kid").and_then(|v| v.as_str()), Some("user2-sign"));
+        assert_eq!(
+            user2_sign.get("kid").and_then(|v| v.as_str()),
+            Some("user2-sign")
+        );
     }
 
     #[test]
     fn test_direct_key_provider_default_keys() {
         let enc1 = KeyMaterial::new_enc_key(None, None, Some("enc1".to_string()), None).unwrap();
         let enc2 = KeyMaterial::new_enc_key(None, None, Some("enc2".to_string()), None).unwrap();
-        let sign1 = KeyMaterial::new_sign_key(None, None, None, Some("sign1".to_string()), None).unwrap();
+        let sign1 =
+            KeyMaterial::new_sign_key(None, None, None, Some("sign1".to_string()), None).unwrap();
 
         let mut provider = DirectKeyProvider::new();
         provider
-            .add_enc_key("enc1", serde_json::from_str(&enc1.to_jwk().unwrap()).unwrap())
-            .add_enc_key("enc2", serde_json::from_str(&enc2.to_jwk().unwrap()).unwrap())
-            .add_sign_key("sign1", serde_json::from_str(&sign1.to_jwk().unwrap()).unwrap())
+            .add_enc_key(
+                "enc1",
+                serde_json::from_str(&enc1.to_jwk().unwrap()).unwrap(),
+            )
+            .add_enc_key(
+                "enc2",
+                serde_json::from_str(&enc2.to_jwk().unwrap()).unwrap(),
+            )
+            .add_sign_key(
+                "sign1",
+                serde_json::from_str(&sign1.to_jwk().unwrap()).unwrap(),
+            )
             .set_default_enc_kid("enc2")
             .set_default_sign_kid("sign1");
 

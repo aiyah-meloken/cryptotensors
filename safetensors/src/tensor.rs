@@ -3,7 +3,7 @@
 // functions, and transparent encryption/decryption support. See NOTICE file for details.
 
 //! Module Containing the most important structures
-use crate::cryptotensors::{CryptoTensors, SerializeCryptoConfig};
+use crate::cryptotensors::{CryptoTensors, DeserializeCryptoConfig, SerializeCryptoConfig};
 use crate::lib::{Cow, HashMap, String, ToString, Vec};
 use crate::slice::{InvalidSlice, SliceIterator, TensorIndexer};
 use core::fmt::Display;
@@ -145,7 +145,7 @@ struct PreparedData {
 /// If you have an owned tensor like this:
 ///
 /// ```rust
-/// use safetensors::tensor::{View, Dtype};
+/// use cryptotensors::tensor::{View, Dtype};
 /// use std::borrow::Cow;
 /// struct Tensor{ dtype: MyDtype, shape: Vec<usize>, data: Vec<u8>}
 ///
@@ -169,7 +169,7 @@ struct PreparedData {
 /// For a borrowed tensor:
 ///
 /// ```rust
-/// use safetensors::tensor::{View, Dtype};
+/// use cryptotensors::tensor::{View, Dtype};
 /// use std::borrow::Cow;
 /// struct Tensor<'data>{ dtype: MyDtype, shape: Vec<usize>, data: &'data[u8]}
 ///
@@ -194,7 +194,7 @@ struct PreparedData {
 /// you can implement the trait to return an owned local buffer containing the data
 /// on CPU (needed to write on disk)
 /// ```rust
-/// use safetensors::tensor::{View, Dtype};
+/// use cryptotensors::tensor::{View, Dtype};
 /// use std::borrow::Cow;
 ///
 /// # type MyDtype = Dtype;
@@ -427,6 +427,160 @@ where
     Ok(())
 }
 
+/// Rewrap (re-encrypt) DEKs in an encrypted safetensors header with new keys.
+///
+/// This function takes header bytes (including the 8-byte size prefix), re-encrypts
+/// the data encryption keys (DEKs) with new master keys, and returns the updated
+/// header bytes. The tensor data is not included.
+///
+/// # Arguments
+///
+/// * `buffer` - Header bytes from an encrypted safetensors file (must include 8-byte size prefix)
+/// * `old_config` - Configuration for decryption (None = use keys from global registry)
+/// * `new_config` - Configuration for encryption with new keys
+///
+/// # Returns
+///
+/// New header bytes with re-encrypted DEKs (including 8-byte size prefix)
+///
+/// # Errors
+///
+/// Returns `SafeTensorError` if:
+/// - The buffer is not a valid safetensors header
+/// - The header is not encrypted
+/// - Key unwrapping or wrapping fails
+#[cfg(feature = "std")]
+pub fn rewrap_header(
+    buffer: &[u8],
+    old_config: Option<&DeserializeCryptoConfig>,
+    new_config: &SerializeCryptoConfig,
+) -> Result<Vec<u8>, SafeTensorError> {
+    // Parse header only (without buffer size validation)
+    let (_header_size, metadata) = SafeTensors::read_metadata_header_only(buffer)?;
+
+    // Check if header is encrypted and parse CryptoTensors
+    let mut crypto = CryptoTensors::from_header_with_config(&metadata, old_config)?
+        .ok_or_else(|| SafeTensorError::CryptoTensorsError(
+            "Buffer is not encrypted, cannot rewrap".to_string()
+        ))?;
+
+    // Call rewrap on CryptoTensors to re-encrypt DEKs
+    crypto.rewrap(new_config)?;
+
+    // Get tensor information from metadata (needed for regenerating header)
+    let tensor_infos: Vec<_> = metadata.offset_keys()
+        .into_iter()
+        .filter_map(|k| metadata.info(&k).map(|i| (k.clone(), i.clone())))
+        .collect();
+
+    // Regenerate metadata with new crypto info
+    let metadata_dict = metadata.metadata().as_ref().cloned().unwrap_or_default();
+    let new_metadata_map = crypto.generate_metadata(tensor_infos.clone(), Some(metadata_dict))?;
+
+    // Reconstruct Metadata object
+    let new_metadata = Metadata::new(new_metadata_map, tensor_infos)?;
+
+    // Serialize header to JSON
+    let header_json = serde_json::to_string(&new_metadata)?;
+
+    // Calculate padding for 8-byte alignment
+    let header_bytes = header_json.as_bytes();
+    let padding = (8 - (header_bytes.len() % 8)) % 8;
+    let n = (header_bytes.len() + padding) as u64;
+
+    if n > MAX_HEADER_SIZE as u64 {
+        return Err(SafeTensorError::HeaderTooLarge);
+    }
+
+    // Build new header bytes
+    let mut result = Vec::with_capacity(N_LEN + header_bytes.len() + padding);
+    result.extend(n.to_le_bytes());
+    result.extend(header_bytes);
+    result.extend(vec![b' '; padding]);
+
+    Ok(result)
+}
+
+/// Rewrap (re-encrypt) DEKs in an encrypted safetensors buffer with new keys.
+///
+/// This function takes complete file bytes, re-encrypts the data encryption keys (DEKs)
+/// with new master keys, and returns the updated file bytes. The tensor data itself
+/// remains unchanged.
+///
+/// # Arguments
+///
+/// * `buffer` - Complete bytes of an encrypted safetensors file
+/// * `old_config` - Configuration for decryption (None = use keys from global registry)
+/// * `new_config` - Configuration for encryption with new keys
+///
+/// # Returns
+///
+/// New file bytes with re-encrypted DEKs
+///
+/// # Errors
+///
+/// Returns `SafeTensorError` if:
+/// - The buffer is not a valid safetensors file
+/// - The file is not encrypted
+/// - Key unwrapping or wrapping fails
+#[cfg(feature = "std")]
+pub fn rewrap(
+    buffer: &[u8],
+    old_config: Option<&DeserializeCryptoConfig>,
+    new_config: &SerializeCryptoConfig,
+) -> Result<Vec<u8>, SafeTensorError> {
+    // Parse metadata to get header size
+    let (header_size, _) = SafeTensors::read_metadata(buffer)?;
+
+    // Calculate header end position
+    let header_end = N_LEN + header_size;
+
+    // Rewrap header (calls rewrap_header)
+    let new_header = rewrap_header(&buffer[..header_end], old_config, new_config)?;
+
+    // Build new file bytes: new header + original tensor data
+    let mut result = new_header;
+    result.extend_from_slice(&buffer[header_end..]);
+
+    Ok(result)
+}
+
+/// Rewrap (re-encrypt) DEKs in an encrypted safetensors file with new keys.
+///
+/// This function reads an encrypted safetensors file, re-encrypts the data encryption
+/// keys (DEKs) with new master keys, and writes the updated file back. The tensor data
+/// itself remains unchanged.
+///
+/// # Arguments
+///
+/// * `filename` - Path to the encrypted safetensors file (will be modified in-place)
+/// * `old_config` - Configuration for decryption (None = use keys from global registry)
+/// * `new_config` - Configuration for encryption with new keys
+///
+/// # Errors
+///
+/// Returns `SafeTensorError` if:
+/// - The file cannot be read or written
+/// - The file is not a valid encrypted safetensors file
+/// - Key unwrapping or wrapping fails
+#[cfg(feature = "std")]
+pub fn rewrap_file(
+    filename: &std::path::Path,
+    old_config: Option<&DeserializeCryptoConfig>,
+    new_config: &SerializeCryptoConfig,
+) -> Result<(), SafeTensorError> {
+    // Read file
+    let buffer = std::fs::read(filename)?;
+
+    // Rewrap (calls rewrap which calls rewrap_header)
+    let new_buffer = rewrap(&buffer, old_config, new_config)?;
+
+    // Write new file
+    std::fs::write(filename, new_buffer)?;
+
+    Ok(())
+}
+
 /// A structure owning some metadata to lookup tensors on a shared `data`
 /// byte-buffer (not owned).
 #[derive(Debug)]
@@ -440,7 +594,35 @@ pub struct SafeTensors<'data> {
 impl<'data> SafeTensors<'data> {
     /// Given a byte-buffer representing the whole safetensor file
     /// parses the header, and returns the size of the header + the parsed data.
+    ///
+    /// This method validates that the buffer contains complete tensor data.
+    /// For parsing header-only buffers (e.g., in rewrap operations), use `read_metadata_header_only`.
     pub fn read_metadata(buffer: &'data [u8]) -> Result<(usize, Metadata), SafeTensorError> {
+        Self::read_metadata_with_validation(buffer, true)
+    }
+
+    /// Parse metadata from a buffer without validating buffer completeness.
+    ///
+    /// This is useful when you only have the header portion of a safetensors file
+    /// (e.g., when re-encrypting headers). The buffer must still contain at least
+    /// the complete header (8-byte size prefix + header JSON).
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - Buffer containing at least the header portion
+    ///
+    /// # Returns
+    ///
+    /// Tuple of (header_size, Metadata)
+    pub fn read_metadata_header_only(buffer: &'data [u8]) -> Result<(usize, Metadata), SafeTensorError> {
+        Self::read_metadata_with_validation(buffer, false)
+    }
+
+    /// Internal method to parse metadata with optional buffer validation.
+    fn read_metadata_with_validation(
+        buffer: &'data [u8],
+        validate_buffer: bool,
+    ) -> Result<(usize, Metadata), SafeTensorError> {
         let buffer_len = buffer.len();
         let Some(header_size_bytes) = buffer.get(..N_LEN) else {
             return Err(SafeTensorError::HeaderTooSmall);
@@ -475,7 +657,9 @@ impl<'data> SafeTensors<'data> {
             serde_json::from_str(string).map_err(SafeTensorError::InvalidHeaderDeserialization)?;
         let metadata: Metadata = metadata.try_into()?;
         let buffer_end = metadata.validate()?;
-        if buffer_end + N_LEN + n != buffer_len {
+        
+        // Only validate buffer completeness if requested
+        if validate_buffer && buffer_end + N_LEN + n != buffer_len {
             return Err(SafeTensorError::MetadataIncompleteBuffer);
         }
 
@@ -486,7 +670,7 @@ impl<'data> SafeTensors<'data> {
     /// parses it and returns the Deserialized form (No Tensor allocation).
     ///
     /// ```
-    /// use safetensors::SafeTensors;
+    /// use cryptotensors::SafeTensors;
     /// use memmap2::MmapOptions;
     /// use std::fs::File;
     ///
@@ -501,12 +685,40 @@ impl<'data> SafeTensors<'data> {
     ///         .tensor("test")
     ///         .unwrap();
     /// ```
+    /// Deserialize SafeTensors from buffer
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - The buffer containing the serialized data
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(SafeTensors)` - Successfully deserialized
+    /// * `Err(SafeTensorError)` - If deserialization fails
     pub fn deserialize(buffer: &'data [u8]) -> Result<Self, SafeTensorError> {
+        Self::deserialize_with_config(buffer, None)
+    }
+
+    /// Deserialize SafeTensors from buffer with optional config
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - The buffer containing the serialized data
+    /// * `config` - Optional deserialization configuration for key sources
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(SafeTensors)` - Successfully deserialized
+    /// * `Err(SafeTensorError)` - If deserialization fails
+    pub fn deserialize_with_config(
+        buffer: &'data [u8],
+        config: Option<&DeserializeCryptoConfig>,
+    ) -> Result<Self, SafeTensorError> {
         let (n, metadata) = SafeTensors::read_metadata(buffer)?;
         let data = &buffer[N_LEN + n..];
 
         // Initialize CryptoTensors from header if encryption metadata is present
-        let crypto = CryptoTensors::from_header(&metadata)?;
+        let crypto = CryptoTensors::from_header_with_config(&metadata, config)?;
 
         Ok(Self {
             metadata,
@@ -1673,5 +1885,311 @@ mod tests {
             }
             _ => panic!("This should not be able to be serialized"),
         }
+    }
+
+    #[test]
+    fn test_rewrap_buffer() {
+        use crate::key::KeyMaterial;
+
+        // Generate old keys
+        let old_enc_key = KeyMaterial::new_enc_key(None, None, Some("old-enc".to_string()), None).unwrap();
+        let old_sign_key = KeyMaterial::new_sign_key(None, None, None, Some("old-sign".to_string()), None).unwrap();
+
+        // Generate new keys
+        let new_enc_key = KeyMaterial::new_enc_key(None, None, Some("new-enc".to_string()), None).unwrap();
+        let new_sign_key = KeyMaterial::new_sign_key(None, None, None, Some("new-sign".to_string()), None).unwrap();
+
+        // Create test tensor
+        let data: Vec<u8> = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+        let shape = vec![2, 2];
+        let tensor = TensorView {
+            dtype: Dtype::F32,
+            shape: shape.clone(),
+            data: &data,
+        };
+
+        // Serialize with old keys
+        let old_config = SerializeCryptoConfig::with_keys(old_enc_key.clone(), old_sign_key.clone());
+        let buffer = serialize([("weight", tensor)], None, Some(&old_config)).unwrap();
+
+        // Verify it's encrypted (check __encryption__ key)
+        let (_, metadata) = SafeTensors::read_metadata(&buffer).unwrap();
+        assert!(metadata.metadata().is_some(), "Metadata is None");
+        let meta = metadata.metadata().as_ref().unwrap();
+        assert!(meta.contains_key("__encryption__"), "Not encrypted");
+
+        // Rewrap with new keys
+        let old_deser_config = DeserializeCryptoConfig::with_keys(old_enc_key.clone(), old_sign_key.clone());
+        let new_ser_config = SerializeCryptoConfig::with_keys(new_enc_key.clone(), new_sign_key.clone());
+
+        let new_buffer = rewrap(&buffer, Some(&old_deser_config), &new_ser_config).unwrap();
+
+        // Verify new buffer has new key info
+        let (_, new_metadata) = SafeTensors::read_metadata(&new_buffer).unwrap();
+        let new_meta = new_metadata.metadata().as_ref().unwrap();
+        let crypto_keys = new_meta.get("__crypto_keys__").unwrap();
+        assert!(crypto_keys.contains("new-enc"), "Should contain new-enc kid");
+
+        // Deserialize with new keys and verify data is unchanged
+        let new_deser_config = DeserializeCryptoConfig::with_keys(new_enc_key, new_sign_key);
+        let loaded = SafeTensors::deserialize_with_config(&new_buffer, Some(&new_deser_config)).unwrap();
+        let loaded_tensor = loaded.tensor("weight").unwrap();
+        assert_eq!(loaded_tensor.shape(), shape);
+        assert_eq!(loaded_tensor.dtype(), Dtype::F32);
+        assert_eq!(loaded_tensor.data(), data);
+    }
+
+    #[test]
+    fn test_rewrap_header_only() {
+        use crate::key::KeyMaterial;
+
+        // Generate keys
+        let old_enc_key = KeyMaterial::new_enc_key(None, None, Some("old-enc".to_string()), None).unwrap();
+        let old_sign_key = KeyMaterial::new_sign_key(None, None, None, Some("old-sign".to_string()), None).unwrap();
+        let new_enc_key = KeyMaterial::new_enc_key(None, None, Some("new-enc".to_string()), None).unwrap();
+        let new_sign_key = KeyMaterial::new_sign_key(None, None, None, Some("new-sign".to_string()), None).unwrap();
+
+        // Create and serialize test tensor
+        let data: Vec<u8> = vec![0u8; 16];
+        let tensor = TensorView {
+            dtype: Dtype::F32,
+            shape: vec![2, 2],
+            data: &data,
+        };
+
+        let old_config = SerializeCryptoConfig::with_keys(old_enc_key.clone(), old_sign_key.clone());
+        let buffer = serialize([("test", tensor)], None, Some(&old_config)).unwrap();
+
+        // Extract header
+        let (header_size, _) = SafeTensors::read_metadata(&buffer).unwrap();
+        let header_end = N_LEN + header_size;
+        let header_bytes = &buffer[..header_end];
+
+        // Rewrap header only
+        let old_deser_config = DeserializeCryptoConfig::with_keys(old_enc_key, old_sign_key);
+        let new_ser_config = SerializeCryptoConfig::with_keys(new_enc_key, new_sign_key);
+
+        let new_header = rewrap_header(header_bytes, Some(&old_deser_config), &new_ser_config).unwrap();
+
+        // Verify new header is valid and contains new key info
+        let (_, new_metadata) = SafeTensors::read_metadata_header_only(&new_header).unwrap();
+        let new_meta = new_metadata.metadata().as_ref().unwrap();
+        let crypto_keys = new_meta.get("__crypto_keys__").unwrap();
+        assert!(crypto_keys.contains("new-enc"));
+        assert!(!crypto_keys.contains("old-enc"));
+    }
+
+    #[test]
+    fn test_rewrap_file() {
+        use crate::key::KeyMaterial;
+        use std::io::Read;
+
+        // Generate keys
+        let old_enc_key = KeyMaterial::new_enc_key(None, None, Some("old-enc-file".to_string()), None).unwrap();
+        let old_sign_key = KeyMaterial::new_sign_key(None, None, None, Some("old-sign-file".to_string()), None).unwrap();
+        let new_enc_key = KeyMaterial::new_enc_key(None, None, Some("new-enc-file".to_string()), None).unwrap();
+        let new_sign_key = KeyMaterial::new_sign_key(None, None, None, Some("new-sign-file".to_string()), None).unwrap();
+
+        // Create test tensor
+        let data: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let tensor = TensorView {
+            dtype: Dtype::F32,
+            shape: vec![2, 2],
+            data: &data,
+        };
+
+        // Serialize with old keys
+        let old_config = SerializeCryptoConfig::with_keys(old_enc_key.clone(), old_sign_key.clone());
+
+        // Create temp file
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let filename = temp_file.path().to_path_buf();
+
+        serialize_to_file([("data", tensor)], None, &filename, Some(&old_config)).unwrap();
+
+        // Rewrap file in-place
+        let old_deser_config = DeserializeCryptoConfig::with_keys(old_enc_key, old_sign_key);
+        let new_ser_config = SerializeCryptoConfig::with_keys(new_enc_key.clone(), new_sign_key.clone());
+
+        rewrap_file(&filename, Some(&old_deser_config), &new_ser_config).unwrap();
+
+        // Read and verify
+        let mut buffer = Vec::new();
+        std::fs::File::open(&filename).unwrap().read_to_end(&mut buffer).unwrap();
+
+        let new_deser_config = DeserializeCryptoConfig::with_keys(new_enc_key, new_sign_key);
+        let loaded = SafeTensors::deserialize_with_config(&buffer, Some(&new_deser_config)).unwrap();
+        let loaded_tensor = loaded.tensor("data").unwrap();
+        assert_eq!(loaded_tensor.data(), data);
+    }
+
+    #[test]
+    fn test_rewrap_unencrypted_fails() {
+        use crate::key::KeyMaterial;
+
+        // Create unencrypted data
+        let data: Vec<u8> = vec![0u8; 16];
+        let tensor = TensorView {
+            dtype: Dtype::F32,
+            shape: vec![2, 2],
+            data: &data,
+        };
+        let buffer = serialize([("test", tensor)], None, None).unwrap();
+
+        // Try to rewrap (should fail)
+        let new_enc_key = KeyMaterial::new_enc_key(None, None, Some("new-enc".to_string()), None).unwrap();
+        let new_sign_key = KeyMaterial::new_sign_key(None, None, None, Some("new-sign".to_string()), None).unwrap();
+        let new_ser_config = SerializeCryptoConfig::with_keys(new_enc_key, new_sign_key);
+
+        let result = rewrap(&buffer, None, &new_ser_config);
+        assert!(result.is_err());
+        match result {
+            Err(SafeTensorError::CryptoTensorsError(msg)) => {
+                assert!(msg.contains("not encrypted"));
+            }
+            other => panic!("Expected CryptoTensorsError, got {:?}", other),
+        }
+    }
+
+    /// Mutex for tests that modify global registry. Enc/sign key loading uses independent paths;
+    /// these tests verify enc direct + sign from registry (and vice versa).
+    static INDEPENDENT_PATHS_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn test_independent_paths_serialize_enc_direct_sign_registry() {
+        use crate::key::KeyMaterial;
+        use crate::registry::{clear_providers, disable_provider, register_provider_with_priority, DirectKeyProvider, PRIORITY_DIRECT};
+
+        let _guard = INDEPENDENT_PATHS_MUTEX.lock().unwrap();
+        clear_providers();
+
+        let enc_key = KeyMaterial::new_enc_key(None, None, Some("indep-enc".to_string()), None).unwrap();
+        let sign_key = KeyMaterial::new_sign_key(None, None, None, Some("indep-sign".to_string()), None).unwrap();
+        let enc_jwk: serde_json::Value = serde_json::from_str(&enc_key.to_jwk().unwrap()).unwrap();
+        let sign_jwk: serde_json::Value = serde_json::from_str(&sign_key.to_jwk().unwrap()).unwrap();
+        let provider = DirectKeyProvider::from_single_keys(enc_jwk, sign_jwk);
+        register_provider_with_priority(Box::new(provider), PRIORITY_DIRECT);
+
+        let mut config = SerializeCryptoConfig::new();
+        config.enc_key = Some(enc_key);
+        config.sign_kid = Some("indep-sign".to_string());
+        // No sign_key: sign comes from registry.
+
+        let data: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let tensor = TensorView {
+            dtype: Dtype::F32,
+            shape: vec![2, 2],
+            data: &data,
+        };
+        let buffer = serialize([("w", tensor)], None, Some(&config)).unwrap();
+        let (_, meta) = SafeTensors::read_metadata(&buffer).unwrap();
+        assert!(meta.metadata().as_ref().unwrap().contains_key("__encryption__"));
+
+        disable_provider("DirectKeyProvider");
+    }
+
+    #[test]
+    fn test_independent_paths_serialize_enc_registry_sign_direct() {
+        use crate::key::KeyMaterial;
+        use crate::registry::{clear_providers, disable_provider, register_provider_with_priority, DirectKeyProvider, PRIORITY_DIRECT};
+
+        let _guard = INDEPENDENT_PATHS_MUTEX.lock().unwrap();
+        clear_providers();
+
+        let enc_key = KeyMaterial::new_enc_key(None, None, Some("indep2-enc".to_string()), None).unwrap();
+        let sign_key = KeyMaterial::new_sign_key(None, None, None, Some("indep2-sign".to_string()), None).unwrap();
+        let enc_jwk: serde_json::Value = serde_json::from_str(&enc_key.to_jwk().unwrap()).unwrap();
+        let sign_jwk: serde_json::Value = serde_json::from_str(&sign_key.to_jwk().unwrap()).unwrap();
+        let provider = DirectKeyProvider::from_single_keys(enc_jwk, sign_jwk);
+        register_provider_with_priority(Box::new(provider), PRIORITY_DIRECT);
+
+        let mut config = SerializeCryptoConfig::new();
+        config.enc_kid = Some("indep2-enc".to_string());
+        config.sign_key = Some(sign_key);
+        // No enc_key: enc comes from registry.
+
+        let data: Vec<u8> = vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+        let tensor = TensorView {
+            dtype: Dtype::F32,
+            shape: vec![2, 2],
+            data: &data,
+        };
+        let buffer = serialize([("w", tensor)], None, Some(&config)).unwrap();
+        let (_, meta) = SafeTensors::read_metadata(&buffer).unwrap();
+        assert!(meta.metadata().as_ref().unwrap().contains_key("__encryption__"));
+
+        disable_provider("DirectKeyProvider");
+    }
+
+    #[test]
+    fn test_independent_paths_deserialize_enc_direct_sign_registry() {
+        use crate::key::KeyMaterial;
+        use crate::registry::{clear_providers, disable_provider, register_provider_with_priority, DirectKeyProvider, PRIORITY_DIRECT};
+
+        let _guard = INDEPENDENT_PATHS_MUTEX.lock().unwrap();
+        clear_providers();
+
+        let enc_key = KeyMaterial::new_enc_key(None, None, Some("d-enc".to_string()), None).unwrap();
+        let sign_key = KeyMaterial::new_sign_key(None, None, None, Some("d-sign".to_string()), None).unwrap();
+        let enc_jwk: serde_json::Value = serde_json::from_str(&enc_key.to_jwk().unwrap()).unwrap();
+        let sign_jwk: serde_json::Value = serde_json::from_str(&sign_key.to_jwk().unwrap()).unwrap();
+        let provider = DirectKeyProvider::from_single_keys(enc_jwk, sign_jwk);
+        register_provider_with_priority(Box::new(provider), PRIORITY_DIRECT);
+
+        let ser_config = SerializeCryptoConfig::with_keys(enc_key.clone(), sign_key);
+        let data: Vec<u8> = vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+        let tensor = TensorView {
+            dtype: Dtype::F32,
+            shape: vec![2, 2],
+            data: &data,
+        };
+        let buffer = serialize([("x", tensor)], None, Some(&ser_config)).unwrap();
+
+        let mut deser_config = DeserializeCryptoConfig::new();
+        deser_config.enc_key = Some(enc_key);
+        // No sign_key: sign from registry (header has sign kid).
+
+        let loaded = SafeTensors::deserialize_with_config(&buffer, Some(&deser_config)).unwrap();
+        let t = loaded.tensor("x").unwrap();
+        assert_eq!(t.shape(), &[2, 2]);
+        assert_eq!(t.data(), data);
+
+        disable_provider("DirectKeyProvider");
+    }
+
+    #[test]
+    fn test_independent_paths_deserialize_enc_registry_sign_direct() {
+        use crate::key::KeyMaterial;
+        use crate::registry::{clear_providers, disable_provider, register_provider_with_priority, DirectKeyProvider, PRIORITY_DIRECT};
+
+        let _guard = INDEPENDENT_PATHS_MUTEX.lock().unwrap();
+        clear_providers();
+
+        let enc_key = KeyMaterial::new_enc_key(None, None, Some("d2-enc".to_string()), None).unwrap();
+        let sign_key = KeyMaterial::new_sign_key(None, None, None, Some("d2-sign".to_string()), None).unwrap();
+        let enc_jwk: serde_json::Value = serde_json::from_str(&enc_key.to_jwk().unwrap()).unwrap();
+        let sign_jwk: serde_json::Value = serde_json::from_str(&sign_key.to_jwk().unwrap()).unwrap();
+        let provider = DirectKeyProvider::from_single_keys(enc_jwk, sign_jwk);
+        register_provider_with_priority(Box::new(provider), PRIORITY_DIRECT);
+
+        let ser_config = SerializeCryptoConfig::with_keys(enc_key, sign_key.clone());
+        let data: Vec<u8> = vec![10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25];
+        let tensor = TensorView {
+            dtype: Dtype::F32,
+            shape: vec![2, 2],
+            data: &data,
+        };
+        let buffer = serialize([("y", tensor)], None, Some(&ser_config)).unwrap();
+
+        let mut deser_config = DeserializeCryptoConfig::new();
+        deser_config.sign_key = Some(sign_key);
+        // No enc_key: enc from registry (header has enc kid).
+
+        let loaded = SafeTensors::deserialize_with_config(&buffer, Some(&deser_config)).unwrap();
+        let t = loaded.tensor("y").unwrap();
+        assert_eq!(t.shape(), &[2, 2]);
+        assert_eq!(t.data(), data);
+
+        disable_provider("DirectKeyProvider");
     }
 }

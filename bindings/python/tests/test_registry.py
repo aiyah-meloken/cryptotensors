@@ -38,16 +38,16 @@ class TestRegistry(unittest.TestCase):
             np.testing.assert_allclose(loaded["weight"], self.data["weight"])
 
             # Clear registry and try to load (should fail)
-            cryptotensors.disable_provider("temp")
+            cryptotensors.disable_provider("DirectKeyProvider")
             with self.assertRaises(Exception):
                 load_file(tmp_path)
 
         finally:
-            cryptotensors.disable_provider("temp")
+            cryptotensors.disable_provider("DirectKeyProvider")
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
-    def test_register_tmp_key_provider_files(self):
+    def test_register_direct_key_provider_files(self):
         # Save keys to a file
         with tempfile.NamedTemporaryFile(
             suffix=".jwk", mode="w", delete=False
@@ -56,7 +56,7 @@ class TestRegistry(unittest.TestCase):
             json.dump({"keys": [self.keys["enc_key"], self.keys["sign_key"]]}, tmp_jwk)
 
         try:
-            cryptotensors.register_tmp_key_provider(files=[jwk_path])
+            cryptotensors.register_direct_key_provider(files=[jwk_path])
 
             with tempfile.NamedTemporaryFile(
                 suffix=".cryptotensors", delete=False
@@ -75,7 +75,7 @@ class TestRegistry(unittest.TestCase):
                 np.testing.assert_allclose(loaded["weight"], self.data["weight"])
 
             finally:
-                cryptotensors.disable_provider("temp")
+                cryptotensors.disable_provider("DirectKeyProvider")
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
         finally:

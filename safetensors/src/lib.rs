@@ -22,19 +22,21 @@ pub mod registry;
 /// Signing/verification functions (Ed25519)
 pub mod signing;
 
-/// serialize_to_file only valid in std
+/// serialize_to_file and rewrap functions only valid in std
 #[cfg(feature = "std")]
-pub use tensor::serialize_to_file;
-pub use tensor::{serialize, Dtype, SafeTensorError, SafeTensors, View};
+pub use tensor::{rewrap, rewrap_file, rewrap_header, serialize_to_file};
+pub use tensor::{serialize, Dtype, Metadata, SafeTensorError, SafeTensors, View};
 
 // CryptoTensors: Re-export key types
-pub use cryptotensors::{CryptoTensors, CryptoTensorsError, SerializeCryptoConfig};
+pub use cryptotensors::{
+    CryptoTensors, CryptoTensorsError, DeserializeCryptoConfig, SerializeCryptoConfig,
+};
 pub use key::KeyMaterial;
 pub use policy::AccessPolicy;
 pub use registry::{
-    disable_provider, enable_provider, load_provider_native, register_provider,
-    register_provider_with_priority, KeyProvider, TempKeyProvider, PRIORITY_ENV, PRIORITY_FILE,
-    PRIORITY_NATIVE, PRIORITY_TEMP,
+    disable_provider, enable_provider, get_master_key, get_signing_key, get_verify_key,
+    load_provider_native, register_provider, register_provider_with_priority, DirectKeyProvider,
+    KeyProvider, PRIORITY_DIRECT, PRIORITY_ENV, PRIORITY_FILE, PRIORITY_NATIVE, PRIORITY_TEMP,
 };
 
 #[cfg(feature = "provider-env")]

@@ -9,8 +9,11 @@
 // modifying the core cryptotensors library.
 
 use crate::cryptotensors::CryptoTensorsError;
+use crate::key::KeyMaterial;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ring::signature;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -47,8 +50,10 @@ const PROVIDER_PUBLIC_KEYS: &[(&str, &str)] = &[
 // Priority Constants
 // ============================================================================
 
-/// Priority for temporary providers registered via Python (highest)
-pub const PRIORITY_TEMP: i32 = 100;
+/// Priority for direct key providers registered via Python (highest)
+pub const PRIORITY_DIRECT: i32 = 100;
+/// @deprecated Use PRIORITY_DIRECT instead
+pub const PRIORITY_TEMP: i32 = PRIORITY_DIRECT;
 /// Priority for native providers loaded from shared libraries
 pub const PRIORITY_NATIVE: i32 = 50;
 /// Priority for file-based providers
@@ -253,6 +258,189 @@ pub fn select_jwk(
 // Built-in Key Providers
 // ============================================================================
 
+/// Direct key provider - supports managing multiple keys
+///
+/// Each key is identified by a kid, and the corresponding key is returned based on the requested kid.
+#[derive(Clone)]
+pub struct DirectKeyProvider {
+    /// Encryption key set (kid -> JWK)
+    enc_keys: HashMap<String, Value>,
+
+    /// Signing key set (kid -> JWK)
+    /// May contain private key (d) and/or public key (x)
+    sign_keys: HashMap<String, Value>,
+
+    /// Default encryption key kid (used when kid is not specified)
+    default_enc_kid: Option<String>,
+
+    /// Default signing key kid (used when kid is not specified)
+    default_sign_kid: Option<String>,
+}
+
+impl DirectKeyProvider {
+    /// Create an empty provider
+    pub fn new() -> Self {
+        Self {
+            enc_keys: HashMap::new(),
+            sign_keys: HashMap::new(),
+            default_enc_kid: None,
+            default_sign_kid: None,
+        }
+    }
+
+    /// Create from a single key pair (simple scenario)
+    /// kid is extracted from JWK
+    pub fn from_single_keys(enc_key: Value, sign_key: Value) -> Self {
+        let enc_kid = enc_key
+            .get("kid")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let sign_kid = sign_key
+            .get("kid")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let mut provider = Self::new();
+
+        if let Some(kid) = &enc_kid {
+            provider.enc_keys.insert(kid.clone(), enc_key);
+            provider.default_enc_kid = Some(kid.clone());
+        }
+
+        if let Some(kid) = &sign_kid {
+            provider.sign_keys.insert(kid.clone(), sign_key);
+            provider.default_sign_kid = Some(kid.clone());
+        }
+
+        provider
+    }
+
+    /// Add encryption key
+    pub fn add_enc_key(&mut self, kid: &str, key: Value) -> &mut Self {
+        self.enc_keys.insert(kid.to_string(), key);
+        // If it is the first key, set as default
+        if self.default_enc_kid.is_none() {
+            self.default_enc_kid = Some(kid.to_string());
+        }
+        self
+    }
+
+    /// Add signing key
+    pub fn add_sign_key(&mut self, kid: &str, key: Value) -> &mut Self {
+        self.sign_keys.insert(kid.to_string(), key);
+        if self.default_sign_kid.is_none() {
+            self.default_sign_kid = Some(kid.to_string());
+        }
+        self
+    }
+
+    /// Set default encryption key kid
+    pub fn set_default_enc_kid(&mut self, kid: &str) -> &mut Self {
+        self.default_enc_kid = Some(kid.to_string());
+        self
+    }
+
+    /// Set default signing key kid
+    pub fn set_default_sign_kid(&mut self, kid: &str) -> &mut Self {
+        self.default_sign_kid = Some(kid.to_string());
+        self
+    }
+
+    /// Builder: Create from KeyMaterial
+    pub fn from_key_material(
+        enc_key: &KeyMaterial,
+        sign_key: &KeyMaterial,
+    ) -> Result<Self, CryptoTensorsError> {
+        let enc_jwk = enc_key.to_jwk()?;
+        let sign_jwk = sign_key.to_jwk()?;
+
+        let enc_val: Value = serde_json::from_str(&enc_jwk)?;
+        let sign_val: Value = serde_json::from_str(&sign_jwk)?;
+
+        Ok(Self::from_single_keys(enc_val, sign_val))
+    }
+}
+
+impl Default for DirectKeyProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl KeyProvider for DirectKeyProvider {
+    fn name(&self) -> &str {
+        "DirectKeyProvider"
+    }
+
+    fn is_ready(&self) -> bool {
+        !self.enc_keys.is_empty() || !self.sign_keys.is_empty()
+    }
+
+    fn matches(&self, _jku: Option<&str>, kid: Option<&str>) -> bool {
+        match kid {
+            Some(k) => self.enc_keys.contains_key(k) || self.sign_keys.contains_key(k),
+            None => {
+                // When no kid, match if there is a default key
+                self.default_enc_kid.is_some() || self.default_sign_kid.is_some()
+            }
+        }
+    }
+
+    fn get_master_key(
+        &self,
+        _jku: Option<&str>,
+        kid: Option<&str>,
+    ) -> Result<Value, CryptoTensorsError> {
+        // Use specified kid or default kid
+        let kid = kid
+            .or(self.default_enc_kid.as_deref())
+            .ok_or_else(|| {
+                CryptoTensorsError::InvalidKey("No enc_kid specified and no default".to_string())
+            })?;
+
+        self.enc_keys
+            .get(kid)
+            .cloned()
+            .ok_or_else(|| CryptoTensorsError::InvalidKey(format!("Key not found: {}", kid)))
+    }
+
+    fn get_verify_key(
+        &self,
+        _jku: Option<&str>,
+        kid: Option<&str>,
+    ) -> Result<Value, CryptoTensorsError> {
+        let kid = kid
+            .or(self.default_sign_kid.as_deref())
+            .ok_or_else(|| {
+                CryptoTensorsError::InvalidKey("No sign_kid specified and no default".to_string())
+            })?;
+
+        // Return signing key (should contain public key)
+        self.sign_keys
+            .get(kid)
+            .cloned()
+            .ok_or_else(|| CryptoTensorsError::InvalidKey(format!("Key not found: {}", kid)))
+    }
+
+    fn get_signing_key(
+        &self,
+        _jku: Option<&str>,
+        kid: Option<&str>,
+    ) -> Result<Value, CryptoTensorsError> {
+        let kid = kid
+            .or(self.default_sign_kid.as_deref())
+            .ok_or_else(|| {
+                CryptoTensorsError::InvalidKey("No sign_kid specified and no default".to_string())
+            })?;
+
+        // Return signing key (should contain private key d)
+        self.sign_keys
+            .get(kid)
+            .cloned()
+            .ok_or_else(|| CryptoTensorsError::InvalidKey(format!("Key not found: {}", kid)))
+    }
+}
+
 /// File-based key provider
 ///
 /// Uses search paths to locate JWK files. When a relative path is provided via `jku`,
@@ -272,7 +460,7 @@ impl FileKeyProvider {
     ///
     /// # Example
     /// ```
-    /// use safetensors::registry::FileKeyProvider;
+    /// use cryptotensors::registry::FileKeyProvider;
     /// let provider = FileKeyProvider::new(vec![
     ///     "/etc/keys".to_string(),
     ///     "~/.config/keys".to_string(),
@@ -517,47 +705,6 @@ impl KeyProvider for EnvKeyProvider {
     }
 }
 
-/// Temporary key provider (used by Python register_tmp_key_provider)
-pub struct TempKeyProvider {
-    keys: Vec<serde_json::Value>,
-}
-
-impl TempKeyProvider {
-    /// Create a new temporary key provider with a list of keys
-    pub fn new(keys: Vec<serde_json::Value>) -> Self {
-        Self { keys }
-    }
-}
-
-impl KeyProvider for TempKeyProvider {
-    fn is_ready(&self) -> bool {
-        !self.keys.is_empty()
-    }
-
-    fn matches(&self, _jku: Option<&str>, _kid: Option<&str>) -> bool {
-        true // Temp keys always match as they have highest priority
-    }
-
-    fn get_master_key(
-        &self,
-        _jku: Option<&str>,
-        kid: Option<&str>,
-    ) -> Result<serde_json::Value, CryptoTensorsError> {
-        select_jwk(&self.keys, "oct", None, kid).ok_or(CryptoTensorsError::NoSuitableKey)
-    }
-
-    fn get_verify_key(
-        &self,
-        _jku: Option<&str>,
-        kid: Option<&str>,
-    ) -> Result<serde_json::Value, CryptoTensorsError> {
-        select_jwk(&self.keys, "okp", None, kid).ok_or(CryptoTensorsError::NoSuitableKey)
-    }
-
-    fn name(&self) -> &str {
-        "temp"
-    }
-}
 
 // ============================================================================
 // Global Registry
@@ -592,6 +739,17 @@ pub trait KeyProvider: Send + Sync {
         jku: Option<&str>,
         kid: Option<&str>,
     ) -> Result<serde_json::Value, CryptoTensorsError>;
+
+    /// Get the signing key (private key) for creating signatures
+    fn get_signing_key(
+        &self,
+        _jku: Option<&str>,
+        _kid: Option<&str>,
+    ) -> Result<serde_json::Value, CryptoTensorsError> {
+        Err(CryptoTensorsError::Registry(
+            "get_signing_key not implemented for this provider".to_string(),
+        ))
+    }
 }
 
 struct ProviderEntry {
@@ -847,6 +1005,31 @@ pub fn get_verify_key(
     )))
 }
 
+/// Get signing key from registered providers
+pub fn get_signing_key(
+    jku: Option<&str>,
+    kid: Option<&str>,
+) -> Result<serde_json::Value, CryptoTensorsError> {
+    let providers = get_providers();
+    let guard = providers
+        .read()
+        .map_err(|_| CryptoTensorsError::Registry("Failed to acquire read lock".to_string()))?;
+
+    for entry in guard.iter() {
+        if entry.enabled && entry.provider.is_ready() && entry.provider.matches(jku, kid) {
+            match entry.provider.get_signing_key(jku, kid) {
+                Ok(key) => return Ok(key),
+                Err(_) => continue,
+            }
+        }
+    }
+
+    Err(CryptoTensorsError::Registry(format!(
+        "No suitable provider found for signing key (jku={:?}, kid={:?})",
+        jku, kid
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -921,5 +1104,84 @@ mod tests {
         // After disable, the provider should be removed
         assert_eq!(guard.len(), 1);
         assert_eq!(guard[0].provider.name(), "low");
+    }
+
+    #[test]
+    fn test_direct_key_provider_single_keys() {
+        // Create encryption and signing keys
+        let enc_key = KeyMaterial::new_enc_key(None, None, Some("test-enc".to_string()), None).unwrap();
+        let sign_key = KeyMaterial::new_sign_key(None, None, None, Some("test-sign".to_string()), None).unwrap();
+
+        // Convert to JWK values
+        let enc_jwk: serde_json::Value = serde_json::from_str(&enc_key.to_jwk().unwrap()).unwrap();
+        let sign_jwk: serde_json::Value = serde_json::from_str(&sign_key.to_jwk().unwrap()).unwrap();
+
+        // Create provider
+        let provider = DirectKeyProvider::from_single_keys(enc_jwk.clone(), sign_jwk.clone());
+
+        assert!(provider.is_ready());
+        assert!(provider.matches(None, Some("test-enc")));
+        assert!(provider.matches(None, Some("test-sign")));
+
+        // Get keys
+        let retrieved_enc = provider.get_master_key(None, Some("test-enc")).unwrap();
+        assert_eq!(retrieved_enc.get("kid").and_then(|v| v.as_str()), Some("test-enc"));
+
+        let retrieved_sign = provider.get_signing_key(None, Some("test-sign")).unwrap();
+        assert_eq!(retrieved_sign.get("kid").and_then(|v| v.as_str()), Some("test-sign"));
+    }
+
+    #[test]
+    fn test_direct_key_provider_multiple_keys() {
+        let mut provider = DirectKeyProvider::new();
+
+        // Create multiple keys
+        let enc1 = KeyMaterial::new_enc_key(None, None, Some("user1-enc".to_string()), None).unwrap();
+        let enc2 = KeyMaterial::new_enc_key(None, None, Some("user2-enc".to_string()), None).unwrap();
+        let sign1 = KeyMaterial::new_sign_key(None, None, None, Some("user1-sign".to_string()), None).unwrap();
+        let sign2 = KeyMaterial::new_sign_key(None, None, None, Some("user2-sign".to_string()), None).unwrap();
+
+        // Add keys
+        provider
+            .add_enc_key("user1-enc", serde_json::from_str(&enc1.to_jwk().unwrap()).unwrap())
+            .add_enc_key("user2-enc", serde_json::from_str(&enc2.to_jwk().unwrap()).unwrap())
+            .add_sign_key("user1-sign", serde_json::from_str(&sign1.to_jwk().unwrap()).unwrap())
+            .add_sign_key("user2-sign", serde_json::from_str(&sign2.to_jwk().unwrap()).unwrap());
+
+        assert!(provider.is_ready());
+
+        // Test retrieval
+        let user1_enc = provider.get_master_key(None, Some("user1-enc")).unwrap();
+        assert_eq!(user1_enc.get("kid").and_then(|v| v.as_str()), Some("user1-enc"));
+
+        let user2_sign = provider.get_signing_key(None, Some("user2-sign")).unwrap();
+        assert_eq!(user2_sign.get("kid").and_then(|v| v.as_str()), Some("user2-sign"));
+    }
+
+    #[test]
+    fn test_direct_key_provider_default_keys() {
+        let enc1 = KeyMaterial::new_enc_key(None, None, Some("enc1".to_string()), None).unwrap();
+        let enc2 = KeyMaterial::new_enc_key(None, None, Some("enc2".to_string()), None).unwrap();
+        let sign1 = KeyMaterial::new_sign_key(None, None, None, Some("sign1".to_string()), None).unwrap();
+
+        let mut provider = DirectKeyProvider::new();
+        provider
+            .add_enc_key("enc1", serde_json::from_str(&enc1.to_jwk().unwrap()).unwrap())
+            .add_enc_key("enc2", serde_json::from_str(&enc2.to_jwk().unwrap()).unwrap())
+            .add_sign_key("sign1", serde_json::from_str(&sign1.to_jwk().unwrap()).unwrap())
+            .set_default_enc_kid("enc2")
+            .set_default_sign_kid("sign1");
+
+        // Should return enc2 when no kid specified (using default)
+        let key = provider.get_master_key(None, None).unwrap();
+        assert_eq!(key.get("kid").and_then(|v| v.as_str()), Some("enc2"));
+
+        // Should return sign1 when no kid specified
+        let key = provider.get_signing_key(None, None).unwrap();
+        assert_eq!(key.get("kid").and_then(|v| v.as_str()), Some("sign1"));
+
+        // Should still be able to get enc1 with explicit kid
+        let key = provider.get_master_key(None, Some("enc1")).unwrap();
+        assert_eq!(key.get("kid").and_then(|v| v.as_str()), Some("enc1"));
     }
 }

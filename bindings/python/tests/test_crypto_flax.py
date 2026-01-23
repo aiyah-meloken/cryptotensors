@@ -25,13 +25,13 @@ class CryptoFlaxTestCase(unittest.TestCase):
         self.keys = generate_test_keys(algorithm="aes256gcm")
         self.config = create_crypto_config(**self.keys)
         # Register key provider for decryption
-        cryptotensors.register_tmp_key_provider(
+        cryptotensors.register_direct_key_provider(
             keys=[self.keys["enc_key"], self.keys["sign_key"]]
         )
 
     def tearDown(self):
         # Clean up key provider
-        cryptotensors.disable_provider("temp")
+        cryptotensors.disable_provider("DirectKeyProvider")
 
     def test_roundtrip_encrypted(self):
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
@@ -50,7 +50,7 @@ class CryptoFlaxTestCase(unittest.TestCase):
                 keys = generate_test_keys(algorithm=algo)
                 config = create_crypto_config(**keys)
                 # Register keys for this algorithm
-                cryptotensors.register_tmp_key_provider(
+                cryptotensors.register_direct_key_provider(
                     keys=[keys["enc_key"], keys["sign_key"]]
                 )
                 try:
@@ -64,7 +64,7 @@ class CryptoFlaxTestCase(unittest.TestCase):
                     for k, v in self.data.items():
                         self.assertTrue(jnp.allclose(v, reloaded[k]))
                 finally:
-                    cryptotensors.disable_provider("temp")
+                    cryptotensors.disable_provider("DirectKeyProvider")
 
     def test_partial_encryption(self):
         config = create_crypto_config(**self.keys, tensors=["test"])

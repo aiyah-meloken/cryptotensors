@@ -32,4 +32,4 @@ def crypto_config():
     yield config
 
     # Clean up key provider after test
-    cryptotensors.disable_provider("temp")
+    cryptotensors.disable_provider("DirectKeyProvider")

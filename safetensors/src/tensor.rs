@@ -1936,7 +1936,7 @@ mod tests {
         let new_ser_config =
             SerializeCryptoConfig::with_keys(new_enc_key.clone(), new_sign_key.clone());
 
-        let new_buffer = rewrap(&buffer, Some(&old_deser_config), &new_ser_config).unwrap();
+        let new_buffer = rewrap(&buffer, &new_ser_config, Some(&old_deser_config)).unwrap();
 
         // Verify new buffer has new key info
         let (_, new_metadata) = SafeTensors::read_metadata(&new_buffer).unwrap();
@@ -1995,7 +1995,7 @@ mod tests {
         let new_ser_config = SerializeCryptoConfig::with_keys(new_enc_key, new_sign_key);
 
         let new_header =
-            rewrap_header(header_bytes, Some(&old_deser_config), &new_ser_config).unwrap();
+            rewrap_header(header_bytes, &new_ser_config, Some(&old_deser_config)).unwrap();
 
         // Verify new header is valid and contains new key info
         let (_, new_metadata) = SafeTensors::read_metadata_header_only(&new_header).unwrap();
@@ -2045,7 +2045,7 @@ mod tests {
         let new_ser_config =
             SerializeCryptoConfig::with_keys(new_enc_key.clone(), new_sign_key.clone());
 
-        rewrap_file(&filename, Some(&old_deser_config), &new_ser_config).unwrap();
+        rewrap_file(&filename, &new_ser_config, Some(&old_deser_config)).unwrap();
 
         // Read and verify
         let mut buffer = Vec::new();
@@ -2082,7 +2082,7 @@ mod tests {
                 .unwrap();
         let new_ser_config = SerializeCryptoConfig::with_keys(new_enc_key, new_sign_key);
 
-        let result = rewrap(&buffer, None, &new_ser_config);
+        let result = rewrap(&buffer, &new_ser_config, None);
         assert!(result.is_err());
         match result {
             Err(SafeTensorError::CryptoTensorsError(msg)) => {

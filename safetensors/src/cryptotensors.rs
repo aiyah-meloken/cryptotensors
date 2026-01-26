@@ -301,7 +301,6 @@ impl SerializeCryptoConfig {
     }
 }
 
-
 /// Configuration for deserialization (optional)
 ///
 /// Key loading: (1) Direct keys — use as-is. (2) Registry — when no direct keys, lookup by kid/jku from header.
@@ -328,7 +327,6 @@ impl DeserializeCryptoConfig {
         config
     }
 }
-
 
 #[derive(Clone, Copy)]
 enum SerializeKeyKind {

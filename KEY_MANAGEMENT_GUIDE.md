@@ -301,8 +301,8 @@ new_config = SerializeCryptoConfig(
     sign_key=new_sign_key
 )
 
-# Rewrap DEKs with new keys
-rewrap_file("model.cryptotensors", "model_new.cryptotensors", new_config=new_config.to_dict())
+# Rewrap DEKs with new keys (in-place)
+rewrap_file("model.cryptotensors", new_config=new_config.to_dict())
 ```
 
 ## Global Registry System

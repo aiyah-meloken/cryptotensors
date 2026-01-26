@@ -322,9 +322,7 @@ fn rewrap_file(
     new_config: PyBound<PyAny>,
     old_config: Option<PyBound<PyAny>>,
 ) -> PyResult<()> {
-    use cryptotensors::{
-        rewrap_file as rewrap_file_impl, DeserializeCryptoConfig, SerializeCryptoConfig,
-    };
+    use cryptotensors::rewrap_file as rewrap_file_impl;
 
     // Prepare configs
     let old_deser_config = if let Some(cfg) = old_config.as_ref() {
@@ -368,9 +366,7 @@ fn rewrap_header(
     new_config: PyBound<PyAny>,
     old_config: Option<PyBound<PyAny>>,
 ) -> PyResult<Vec<u8>> {
-    use cryptotensors::{
-        rewrap_header as rewrap_header_impl, DeserializeCryptoConfig, SerializeCryptoConfig,
-    };
+    use cryptotensors::rewrap_header as rewrap_header_impl;
 
     // Prepare configs
     let old_deser_config = if let Some(cfg) = old_config.as_ref() {
@@ -414,7 +410,7 @@ fn rewrap(
     new_config: PyBound<PyAny>,
     old_config: Option<PyBound<PyAny>>,
 ) -> PyResult<Vec<u8>> {
-    use cryptotensors::{rewrap as rewrap_impl, DeserializeCryptoConfig, SerializeCryptoConfig};
+    use cryptotensors::rewrap as rewrap_impl;
 
     // Prepare configs
     let old_deser_config = if let Some(cfg) = old_config.as_ref() {

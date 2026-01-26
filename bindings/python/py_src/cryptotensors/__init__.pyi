@@ -79,26 +79,6 @@ def rewrap_file(filename, new_config, old_config=None):
     """
     pass
 
-def rewrap_header(header_bytes, new_config, old_config=None):
-    """
-    Rewrap (re-encrypt) DEKs in an encrypted safetensors header with new keys.
-
-    This function takes header bytes, re-encrypts the data encryption keys (DEKs)
-    with new master keys, and returns the updated header bytes. The tensor data is not included.
-
-    Args:
-        header_bytes (`bytes`):
-            Header bytes from an encrypted safetensors file (should include 8-byte size prefix)
-        new_config (`Dict[str, Any]`):
-            Configuration for encryption with new keys (same format as SerializeCryptoConfig)
-        old_config (`Dict[str, Any]`, *optional*):
-            Configuration for decryption (None = use keys from header)
-
-    Returns:
-        (`bytes`): New header bytes with re-encrypted DEKs
-    """
-    pass
-
 def rewrap_header(buffer, new_config, old_config=None):
     """
     Rewrap (re-encrypt) DEKs in an encrypted safetensors header with new keys.

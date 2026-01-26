@@ -16,11 +16,8 @@ from cryptotensors import (
     register_direct_key_provider,
     disable_provider,
     serialize_file,
-    deserialize,
     safe_open,
     rewrap_file,
-    rewrap_header,
-    rewrap,
 )
 from crypto_utils import generate_test_keys
 
@@ -51,7 +48,7 @@ class TestConfigIntegration:
             try:
                 os.unlink(filename)
             except (OSError, PermissionError):
-                pass
+                pass  # Best-effort cleanup: ignore errors deleting temp file
 
     def test_config_with_provider(self):
         """Test SerializeCryptoConfig with provider (via register_direct_key_provider)"""
@@ -144,12 +141,6 @@ class TestConfigIntegration:
             try:
                 serialize_file(tensors, filename, config=serialize_config.to_dict())
 
-                # Deserialize with config (via registry)
-                deserialize_config = DeserializeCryptoConfig(
-                    enc_key=keys["enc_key"],
-                    sign_key=keys["sign_key"],
-                )
-
                 with safe_open(filename, framework="pt") as f:
                     loaded_weight = f.get_tensor("weight")
                     loaded_bias = f.get_tensor("bias")
@@ -160,7 +151,7 @@ class TestConfigIntegration:
                 try:
                     os.unlink(filename)
                 except (OSError, PermissionError):
-                    pass
+                    pass  # Best-effort cleanup: ignore errors deleting temp file
         finally:
             disable_provider("DirectKeyProvider")
 
@@ -202,7 +193,7 @@ class TestConfigIntegration:
             try:
                 os.unlink(filename)
             except (OSError, PermissionError):
-                pass
+                pass  # Best-effort cleanup: ignore errors deleting temp file
 
     def test_safe_open_with_dict_config(self):
         """Test safe_open with dict format config"""
@@ -238,7 +229,7 @@ class TestConfigIntegration:
             try:
                 os.unlink(filename)
             except (OSError, PermissionError):
-                pass
+                pass  # Best-effort cleanup: ignore errors deleting temp file
 
     def test_safe_open_without_config_uses_registry(self):
         """Test safe_open without config parameter (backward compatibility, uses registry)"""
@@ -273,7 +264,7 @@ class TestConfigIntegration:
                 try:
                     os.unlink(filename)
                 except (OSError, PermissionError):
-                    pass
+                    pass  # Best-effort cleanup: ignore errors deleting temp file
         finally:
             disable_provider("DirectKeyProvider")
 
@@ -316,7 +307,7 @@ class TestConfigIntegration:
                 try:
                     os.unlink(filename)
                 except (OSError, PermissionError):
-                    pass
+                    pass  # Best-effort cleanup: ignore errors deleting temp file
         finally:
             disable_provider("DirectKeyProvider")
 
@@ -351,7 +342,7 @@ class TestConfigIntegration:
                 try:
                     os.unlink(filename)
                 except (OSError, PermissionError):
-                    pass
+                    pass  # Best-effort cleanup: ignore errors deleting temp file
         finally:
             disable_provider("DirectKeyProvider")
 
@@ -415,7 +406,7 @@ class TestConfigIntegration:
                 try:
                     os.unlink(filename)
                 except (OSError, PermissionError):
-                    pass
+                    pass  # Best-effort cleanup: ignore errors deleting temp file
         finally:
             disable_provider("DirectKeyProvider")
 
@@ -464,6 +455,6 @@ class TestConfigIntegration:
                 try:
                     os.unlink(filename)
                 except (OSError, PermissionError):
-                    pass
+                    pass  # Best-effort cleanup: ignore errors deleting temp file
         finally:
             disable_provider("DirectKeyProvider")

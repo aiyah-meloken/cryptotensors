@@ -84,9 +84,9 @@ config = SerializeCryptoConfig(
 save_file(tensors, "model.cryptotensors", config=config.to_dict())
 
 # Method 2: Using kid/jku (with global Registry)
-from cryptotensors import register_tmp_key_provider
+from cryptotensors import register_direct_key_provider
 
-register_tmp_key_provider(files=["keys.jwk"])  # Register keys once
+register_direct_key_provider(files=["keys.jwk"])  # Register keys once
 config = SerializeCryptoConfig(enc_kid="my-enc", sign_kid="my-sign")
 save_file(tensors, "model.cryptotensors", config=config.to_dict())
 

@@ -47,7 +47,6 @@ impl fmt::Display for EncryptionAlgorithm {
 }
 
 impl EncryptionAlgorithm {
-
     /// Get the appropriate AEAD algorithm from the ring crate
     pub fn get_aead_algo(&self) -> &'static aead::Algorithm {
         match self {

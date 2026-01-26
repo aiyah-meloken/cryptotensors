@@ -16,10 +16,10 @@ from cryptotensors import (
     DeserializeCryptoConfig,
     register_direct_key_provider,
     disable_provider,
-    serialize_file,
     safe_open,
     rewrap_file,
 )
+from cryptotensors.torch import save_file
 from crypto_utils import generate_test_keys
 
 
@@ -43,7 +43,7 @@ class TestConfigIntegration:
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
             filename = f.name
         try:
-            serialize_file(tensors, filename, config=config.to_dict())
+            save_file(tensors, filename, config=config.to_dict())
             assert os.path.exists(filename)
         finally:
             try:
@@ -140,7 +140,7 @@ class TestConfigIntegration:
             with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
                 filename = f.name
             try:
-                serialize_file(tensors, filename, config=serialize_config.to_dict())
+                save_file(tensors, filename, config=serialize_config.to_dict())
 
                 with safe_open(filename, framework="pt") as f:
                     loaded_weight = f.get_tensor("weight")
@@ -176,7 +176,7 @@ class TestConfigIntegration:
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
             filename = f.name
         try:
-            serialize_file(tensors, filename, config=serialize_config.to_dict())
+            save_file(tensors, filename, config=serialize_config.to_dict())
 
             # Deserialize with DeserializeCryptoConfig object
             deserialize_config = DeserializeCryptoConfig(
@@ -217,7 +217,7 @@ class TestConfigIntegration:
         with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
             filename = f.name
         try:
-            serialize_file(tensors, filename, config=serialize_config.to_dict())
+            save_file(tensors, filename, config=serialize_config.to_dict())
 
             # Deserialize with dict config
             config_dict = {
@@ -257,7 +257,7 @@ class TestConfigIntegration:
             with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
                 filename = f.name
             try:
-                serialize_file(tensors, filename, config=serialize_config.to_dict())
+                save_file(tensors, filename, config=serialize_config.to_dict())
 
                 # Deserialize without config (should use registry)
                 with safe_open(filename, framework="pt") as f:
@@ -295,7 +295,7 @@ class TestConfigIntegration:
             with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
                 filename = f.name
             try:
-                serialize_file(tensors, filename, config=serialize_config.to_dict())
+                save_file(tensors, filename, config=serialize_config.to_dict())
 
                 # Deserialize with config (keys1) - should work even though registry has keys2
                 deserialize_config = DeserializeCryptoConfig(
@@ -337,7 +337,7 @@ class TestConfigIntegration:
             with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
                 filename = f.name
             try:
-                serialize_file(tensors, filename, config=serialize_config.to_dict())
+                save_file(tensors, filename, config=serialize_config.to_dict())
 
                 # Deserialize (should automatically use registered provider)
                 with safe_open(filename, framework="pt") as f:
@@ -375,7 +375,7 @@ class TestConfigIntegration:
                 filename = f.name
             try:
                 # Serialize with old keys
-                serialize_file(tensors, filename, config=serialize_config.to_dict())
+                save_file(tensors, filename, config=serialize_config.to_dict())
 
                 # Verify can decrypt with old keys
                 with safe_open(filename, framework="pt") as f:
@@ -439,7 +439,7 @@ class TestConfigIntegration:
             with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
                 filename = f.name
             try:
-                serialize_file(tensors, filename, config=serialize_config.to_dict())
+                save_file(tensors, filename, config=serialize_config.to_dict())
 
                 # Rewrap without old_config (should use keys from header via registry)
                 new_config = SerializeCryptoConfig(

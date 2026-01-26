@@ -1,6 +1,13 @@
 // MODIFICATION: This file has been modified from the original safetensors project.
 // Added module exports for CryptoTensors encryption functionality.
 // See NOTICE file for details.
+//
+// TODO(no_std): CryptoTensors encryption modules currently require std due to:
+// - registry.rs: std::sync::RwLock, std::fs::File, libloading for dynamic providers
+// - policy.rs: regorus (Rego engine) may require std
+// - Various modules use std::collections::HashMap, std::sync::Arc
+// Future work: Extract pure crypto functions (encrypt/decrypt/sign/verify) to support no_std,
+// requiring users to pass keys directly instead of using the registry system.
 
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]

@@ -305,10 +305,10 @@ fn serialize_file(
 /// Args:
 ///     filename (`str` or `Path`):
 ///         Path to the encrypted safetensors file (will be modified in-place)
-///     new_config (`Dict[str, Any]`):
-///         Configuration for encryption with new keys
 ///     old_config (`Dict[str, Any]`, *optional*):
 ///         Configuration for decryption (None = use keys from file header)
+///     new_config (`Dict[str, Any]`):
+///         Configuration for encryption with new keys
 ///
 /// Returns:
 ///     (`None`): Function modifies the file in-place
@@ -316,11 +316,11 @@ fn serialize_file(
 /// Raises:
 ///     `SafetensorError`: If rewrap fails
 #[pyfunction]
-#[pyo3(signature = (filename, new_config, old_config=None))]
+#[pyo3(signature = (filename, old_config=None, *, new_config))]
 fn rewrap_file(
     filename: PathBuf,
-    new_config: PyBound<PyAny>,
     old_config: Option<PyBound<PyAny>>,
+    new_config: PyBound<PyAny>,
 ) -> PyResult<()> {
     use cryptotensors::rewrap_file as rewrap_file_impl;
 
@@ -349,10 +349,10 @@ fn rewrap_file(
 /// Args:
 ///     buffer (`bytes`):
 ///         Header bytes from an encrypted safetensors file (should include 8-byte size prefix)
-///     new_config (`Dict[str, Any]`):
-///         Configuration for encryption with new keys
 ///     old_config (`Dict[str, Any]`, *optional*):
 ///         Configuration for decryption (None = use keys from header)
+///     new_config (`Dict[str, Any]`):
+///         Configuration for encryption with new keys
 ///
 /// Returns:
 ///     (`bytes`): New header bytes with re-encrypted DEKs
@@ -360,11 +360,11 @@ fn rewrap_file(
 /// Raises:
 ///     `SafetensorError`: If rewrap fails
 #[pyfunction]
-#[pyo3(signature = (buffer, new_config, old_config=None))]
+#[pyo3(signature = (buffer, old_config=None, *, new_config))]
 fn rewrap_header(
     buffer: &[u8],
-    new_config: PyBound<PyAny>,
     old_config: Option<PyBound<PyAny>>,
+    new_config: PyBound<PyAny>,
 ) -> PyResult<Vec<u8>> {
     use cryptotensors::rewrap_header as rewrap_header_impl;
 
@@ -393,10 +393,10 @@ fn rewrap_header(
 /// Args:
 ///     buffer (`bytes`):
 ///         Complete bytes of an encrypted safetensors file
-///     new_config (`Dict[str, Any]`):
-///         Configuration for encryption with new keys
 ///     old_config (`Dict[str, Any]`, *optional*):
 ///         Configuration for decryption (None = use keys from file header)
+///     new_config (`Dict[str, Any]`):
+///         Configuration for encryption with new keys
 ///
 /// Returns:
 ///     (`bytes`): New file bytes with re-encrypted DEKs
@@ -404,11 +404,11 @@ fn rewrap_header(
 /// Raises:
 ///     `SafetensorError`: If rewrap fails
 #[pyfunction]
-#[pyo3(signature = (buffer, new_config, old_config=None))]
+#[pyo3(signature = (buffer, old_config=None, *, new_config))]
 fn rewrap(
     buffer: &[u8],
-    new_config: PyBound<PyAny>,
     old_config: Option<PyBound<PyAny>>,
+    new_config: PyBound<PyAny>,
 ) -> PyResult<Vec<u8>> {
     use cryptotensors::rewrap as rewrap_impl;
 

@@ -394,7 +394,7 @@ class TestConfigIntegration:
                     sign_key=new_keys["sign_key"],
                 )
 
-                rewrap_file(filename, new_config.to_dict(), old_config.to_dict())
+                rewrap_file(filename, old_config.to_dict(), new_config=new_config.to_dict())
 
                 # Register new keys for decryption
                 disable_provider("DirectKeyProvider")
@@ -447,7 +447,7 @@ class TestConfigIntegration:
                     sign_key=new_keys["sign_key"],
                 )
 
-                rewrap_file(filename, new_config.to_dict(), None)
+                rewrap_file(filename, None, new_config=new_config.to_dict())
 
                 # Register new keys for decryption
                 disable_provider("DirectKeyProvider")

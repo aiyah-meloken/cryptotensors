@@ -56,7 +56,7 @@ def serialize_file(tensor_dict, filename, metadata=None, config=None):
     pass
 
 @staticmethod
-def rewrap_file(filename, new_config, old_config=None):
+def rewrap_file(filename, old_config=None, *, new_config):
     """
     Rewrap (re-encrypt) DEKs in an encrypted safetensors file with new keys.
 
@@ -66,10 +66,10 @@ def rewrap_file(filename, new_config, old_config=None):
     Args:
         filename (`str` or `os.PathLike`):
             Path to the encrypted safetensors file (will be modified in-place)
-        new_config (`Dict[str, Any]`):
-            Configuration for encryption with new keys (same format as SerializeCryptoConfig)
         old_config (`Dict[str, Any]`, *optional*):
             Configuration for decryption (None = use keys from file header)
+        new_config (`Dict[str, Any]`):
+            Configuration for encryption with new keys (same format as SerializeCryptoConfig)
 
     Returns:
         (`None`): Function modifies the file in-place
@@ -79,7 +79,7 @@ def rewrap_file(filename, new_config, old_config=None):
     """
     pass
 
-def rewrap_header(buffer, new_config, old_config=None):
+def rewrap_header(buffer, old_config=None, *, new_config):
     """
     Rewrap (re-encrypt) DEKs in an encrypted safetensors header with new keys.
 
@@ -89,10 +89,10 @@ def rewrap_header(buffer, new_config, old_config=None):
     Args:
         buffer (`bytes`):
             Header bytes from an encrypted safetensors file (should include 8-byte size prefix)
-        new_config (`Dict[str, Any]`):
-            Configuration for encryption with new keys (same format as SerializeCryptoConfig)
         old_config (`Dict[str, Any]`, *optional*):
             Configuration for decryption (None = use keys from header)
+        new_config (`Dict[str, Any]`):
+            Configuration for encryption with new keys (same format as SerializeCryptoConfig)
 
     Returns:
         (`bytes`): New header bytes with re-encrypted DEKs
@@ -102,7 +102,7 @@ def rewrap_header(buffer, new_config, old_config=None):
     """
     pass
 
-def rewrap(buffer, new_config, old_config=None):
+def rewrap(buffer, old_config=None, *, new_config):
     """
     Rewrap (re-encrypt) DEKs in an encrypted safetensors file bytes with new keys.
 
@@ -112,10 +112,10 @@ def rewrap(buffer, new_config, old_config=None):
     Args:
         buffer (`bytes`):
             Complete bytes of an encrypted safetensors file
-        new_config (`Dict[str, Any]`):
-            Configuration for encryption with new keys (same format as SerializeCryptoConfig)
         old_config (`Dict[str, Any]`, *optional*):
             Configuration for decryption (None = use keys from file header)
+        new_config (`Dict[str, Any]`):
+            Configuration for encryption with new keys (same format as SerializeCryptoConfig)
 
     Returns:
         (`bytes`): New file bytes with re-encrypted DEKs

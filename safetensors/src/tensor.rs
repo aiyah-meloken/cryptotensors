@@ -436,8 +436,8 @@ where
 /// # Arguments
 ///
 /// * `buffer` - Header bytes from an encrypted safetensors file (must include 8-byte size prefix)
-/// * `old_config` - Configuration for decryption (None = use keys from global registry)
 /// * `new_config` - Configuration for encryption with new keys
+/// * `old_config` - Configuration for decryption (None = use keys from global registry)
 ///
 /// # Returns
 ///
@@ -452,8 +452,8 @@ where
 #[cfg(feature = "std")]
 pub fn rewrap_header(
     buffer: &[u8],
-    old_config: Option<&DeserializeCryptoConfig>,
     new_config: &SerializeCryptoConfig,
+    old_config: Option<&DeserializeCryptoConfig>,
 ) -> Result<Vec<u8>, SafeTensorError> {
     // Parse header only (without buffer size validation)
     let (_header_size, metadata) = SafeTensors::read_metadata_header_only(buffer)?;
@@ -513,8 +513,8 @@ pub fn rewrap_header(
 /// # Arguments
 ///
 /// * `buffer` - Complete bytes of an encrypted safetensors file
-/// * `old_config` - Configuration for decryption (None = use keys from global registry)
 /// * `new_config` - Configuration for encryption with new keys
+/// * `old_config` - Configuration for decryption (None = use keys from global registry)
 ///
 /// # Returns
 ///
@@ -529,8 +529,8 @@ pub fn rewrap_header(
 #[cfg(feature = "std")]
 pub fn rewrap(
     buffer: &[u8],
-    old_config: Option<&DeserializeCryptoConfig>,
     new_config: &SerializeCryptoConfig,
+    old_config: Option<&DeserializeCryptoConfig>,
 ) -> Result<Vec<u8>, SafeTensorError> {
     // Parse metadata to get header size
     let (header_size, _) = SafeTensors::read_metadata(buffer)?;
@@ -539,7 +539,7 @@ pub fn rewrap(
     let header_end = N_LEN + header_size;
 
     // Rewrap header (calls rewrap_header)
-    let new_header = rewrap_header(&buffer[..header_end], old_config, new_config)?;
+    let new_header = rewrap_header(&buffer[..header_end], new_config, old_config)?;
 
     // Build new file bytes: new header + original tensor data
     let mut result = new_header;
@@ -557,8 +557,8 @@ pub fn rewrap(
 /// # Arguments
 ///
 /// * `filename` - Path to the encrypted safetensors file (will be modified in-place)
-/// * `old_config` - Configuration for decryption (None = use keys from global registry)
 /// * `new_config` - Configuration for encryption with new keys
+/// * `old_config` - Configuration for decryption (None = use keys from global registry)
 ///
 /// # Errors
 ///
@@ -569,14 +569,14 @@ pub fn rewrap(
 #[cfg(feature = "std")]
 pub fn rewrap_file(
     filename: &std::path::Path,
-    old_config: Option<&DeserializeCryptoConfig>,
     new_config: &SerializeCryptoConfig,
+    old_config: Option<&DeserializeCryptoConfig>,
 ) -> Result<(), SafeTensorError> {
     // Read file
     let buffer = std::fs::read(filename)?;
 
     // Rewrap (calls rewrap which calls rewrap_header)
-    let new_buffer = rewrap(&buffer, old_config, new_config)?;
+    let new_buffer = rewrap(&buffer, new_config, old_config)?;
 
     // Write new file
     std::fs::write(filename, new_buffer)?;

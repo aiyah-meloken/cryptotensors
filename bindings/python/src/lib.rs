@@ -305,10 +305,10 @@ fn serialize_file(
 /// Args:
 ///     filename (`str` or `Path`):
 ///         Path to the encrypted safetensors file (will be modified in-place)
-///     old_config (`Dict[str, Any]`, *optional*):
-///         Configuration for decryption (None = use keys from file header)
 ///     new_config (`Dict[str, Any]`):
 ///         Configuration for encryption with new keys
+///     old_config (`Dict[str, Any]`, *optional*):
+///         Configuration for decryption (None = use keys from file header)
 ///
 /// Returns:
 ///     (`None`): Function modifies the file in-place
@@ -316,11 +316,11 @@ fn serialize_file(
 /// Raises:
 ///     `SafetensorError`: If rewrap fails
 #[pyfunction]
-#[pyo3(signature = (filename, old_config=None, *, new_config))]
+#[pyo3(signature = (filename, new_config, old_config=None))]
 fn rewrap_file(
     filename: PathBuf,
-    old_config: Option<PyBound<PyAny>>,
     new_config: PyBound<PyAny>,
+    old_config: Option<PyBound<PyAny>>,
 ) -> PyResult<()> {
     use cryptotensors::rewrap_file as rewrap_file_impl;
 
@@ -335,7 +335,7 @@ fn rewrap_file(
         .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
 
     // Call safetensors crate function
-    rewrap_file_impl(&filename, old_deser_config.as_ref(), &new_ser_config)
+    rewrap_file_impl(&filename, &new_ser_config, old_deser_config.as_ref())
         .map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
 
     Ok(())
@@ -349,10 +349,10 @@ fn rewrap_file(
 /// Args:
 ///     buffer (`bytes`):
 ///         Header bytes from an encrypted safetensors file (should include 8-byte size prefix)
-///     old_config (`Dict[str, Any]`, *optional*):
-///         Configuration for decryption (None = use keys from header)
 ///     new_config (`Dict[str, Any]`):
 ///         Configuration for encryption with new keys
+///     old_config (`Dict[str, Any]`, *optional*):
+///         Configuration for decryption (None = use keys from header)
 ///
 /// Returns:
 ///     (`bytes`): New header bytes with re-encrypted DEKs
@@ -360,11 +360,11 @@ fn rewrap_file(
 /// Raises:
 ///     `SafetensorError`: If rewrap fails
 #[pyfunction]
-#[pyo3(signature = (buffer, old_config=None, *, new_config))]
+#[pyo3(signature = (buffer, new_config, old_config=None))]
 fn rewrap_header(
     buffer: &[u8],
-    old_config: Option<PyBound<PyAny>>,
     new_config: PyBound<PyAny>,
+    old_config: Option<PyBound<PyAny>>,
 ) -> PyResult<Vec<u8>> {
     use cryptotensors::rewrap_header as rewrap_header_impl;
 
@@ -379,7 +379,7 @@ fn rewrap_header(
         .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
 
     // Call safetensors crate function
-    let result = rewrap_header_impl(buffer, old_deser_config.as_ref(), &new_ser_config)
+    let result = rewrap_header_impl(buffer, &new_ser_config, old_deser_config.as_ref())
         .map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
 
     Ok(result)
@@ -393,10 +393,10 @@ fn rewrap_header(
 /// Args:
 ///     buffer (`bytes`):
 ///         Complete bytes of an encrypted safetensors file
-///     old_config (`Dict[str, Any]`, *optional*):
-///         Configuration for decryption (None = use keys from file header)
 ///     new_config (`Dict[str, Any]`):
 ///         Configuration for encryption with new keys
+///     old_config (`Dict[str, Any]`, *optional*):
+///         Configuration for decryption (None = use keys from file header)
 ///
 /// Returns:
 ///     (`bytes`): New file bytes with re-encrypted DEKs
@@ -404,11 +404,11 @@ fn rewrap_header(
 /// Raises:
 ///     `SafetensorError`: If rewrap fails
 #[pyfunction]
-#[pyo3(signature = (buffer, old_config=None, *, new_config))]
+#[pyo3(signature = (buffer, new_config, old_config=None))]
 fn rewrap(
     buffer: &[u8],
-    old_config: Option<PyBound<PyAny>>,
     new_config: PyBound<PyAny>,
+    old_config: Option<PyBound<PyAny>>,
 ) -> PyResult<Vec<u8>> {
     use cryptotensors::rewrap as rewrap_impl;
 
@@ -423,7 +423,7 @@ fn rewrap(
         .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
 
     // Call safetensors crate function
-    let result = rewrap_impl(buffer, old_deser_config.as_ref(), &new_ser_config)
+    let result = rewrap_impl(buffer, &new_ser_config, old_deser_config.as_ref())
         .map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
 
     Ok(result)

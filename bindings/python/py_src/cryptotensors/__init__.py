@@ -110,13 +110,13 @@ register_tmp_key_provider = register_direct_key_provider
 class SerializeCryptoConfig:
     """
     Serialization encryption configuration
-    
+
     Key loading (two paths):
     1. Direct keys (enc_key/sign_key) - if provided, use as-is and ignore enc_kid/enc_jku/sign_kid/sign_jku
     2. Registry lookup (enc_kid/enc_jku/sign_kid/sign_jku) - when no direct keys, lookup from Registry
        - Use register_direct_key_provider() to register keys to global Registry first
     """
-    
+
     def __init__(
         self,
         enc_key=None,
@@ -130,7 +130,7 @@ class SerializeCryptoConfig:
     ):
         """
         Initialize SerializeCryptoConfig
-        
+
         Args:
             enc_key (dict, optional): Encryption key (JWK format)
             sign_key (dict, optional): Signing key (JWK format)
@@ -153,7 +153,7 @@ class SerializeCryptoConfig:
         }
         # Remove None values
         self.config = {k: v for k, v in self.config.items() if v is not None}
-    
+
     def to_dict(self):
         """Convert to dict for internal use"""
         return self.config
@@ -162,19 +162,19 @@ class SerializeCryptoConfig:
 class DeserializeCryptoConfig:
     """
     Deserialization decryption configuration (optional)
-    
+
     Key loading (two paths):
     1. Direct keys (enc_key/sign_key) - if provided, use as-is and ignore kid/jku from header
     2. Registry lookup - when no direct keys, lookup by kid/jku from header
        - Use register_direct_key_provider() to register keys to global Registry first
-    
+
     Note: kid/jku are read from header for registry lookup, no need to specify here
     """
-    
+
     def __init__(self, enc_key=None, sign_key=None):
         """
         Initialize DeserializeCryptoConfig
-        
+
         Args:
             enc_key (dict, optional): Encryption key (JWK format)
             sign_key (dict, optional): Signing key (JWK format)
@@ -185,7 +185,7 @@ class DeserializeCryptoConfig:
         }
         # Remove None values
         self.config = {k: v for k, v in self.config.items() if v is not None}
-    
+
     def to_dict(self):
         """Convert to dict for internal use"""
         return self.config

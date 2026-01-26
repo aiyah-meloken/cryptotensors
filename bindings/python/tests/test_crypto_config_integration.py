@@ -2,6 +2,7 @@
 Integration tests for the new Config API.
 These tests cover complete serialization/deserialization workflows.
 """
+
 import pytest
 import tempfile
 import os
@@ -183,7 +184,9 @@ class TestConfigIntegration:
                 sign_key=keys["sign_key"],
             )
 
-            with safe_open(filename, framework="pt", config=deserialize_config.to_dict()) as f:
+            with safe_open(
+                filename, framework="pt", config=deserialize_config.to_dict()
+            ) as f:
                 loaded_weight = f.get_tensor("weight")
                 loaded_bias = f.get_tensor("bias")
 
@@ -300,7 +303,9 @@ class TestConfigIntegration:
                     sign_key=keys1["sign_key"],
                 )
 
-                with safe_open(filename, framework="pt", config=deserialize_config.to_dict()) as f:
+                with safe_open(
+                    filename, framework="pt", config=deserialize_config.to_dict()
+                ) as f:
                     loaded_weight = f.get_tensor("weight")
                     assert torch.allclose(tensors["weight"], loaded_weight)
             finally:
@@ -393,7 +398,9 @@ class TestConfigIntegration:
 
                 # Register new keys for decryption
                 disable_provider("DirectKeyProvider")
-                register_direct_key_provider(keys=[new_keys["enc_key"], new_keys["sign_key"]])
+                register_direct_key_provider(
+                    keys=[new_keys["enc_key"], new_keys["sign_key"]]
+                )
 
                 # Verify can decrypt with new keys
                 with safe_open(filename, framework="pt") as f:
@@ -444,7 +451,9 @@ class TestConfigIntegration:
 
                 # Register new keys for decryption
                 disable_provider("DirectKeyProvider")
-                register_direct_key_provider(keys=[new_keys["enc_key"], new_keys["sign_key"]])
+                register_direct_key_provider(
+                    keys=[new_keys["enc_key"], new_keys["sign_key"]]
+                )
 
                 # Verify can decrypt with new keys
                 with safe_open(filename, framework="pt") as f:

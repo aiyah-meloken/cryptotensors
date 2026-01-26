@@ -92,12 +92,11 @@ impl FileJwkPath {
                 _ => return Err(CryptoTensorsError::InvalidJwkUrl(url.to_string())),
             };
 
-            let path = if rest.starts_with('/') {
+            let path = if let Some(path_str) = rest.strip_prefix('/') {
                 // Handle absolute paths: file:///path or file:///C:/path
                 #[cfg(windows)]
                 {
-                    let path_str = &rest[1..]; // Remove leading /
-                                               // Check for Windows drive letter (C:, D:, etc.)
+                    // Check for Windows drive letter (C:, D:, etc.)
                     if let Some(colon_pos) = path_str.find(':') {
                         if colon_pos == 1
                             && path_str
@@ -124,8 +123,8 @@ impl FileJwkPath {
 
                 #[cfg(not(windows))]
                 {
-                    // Unix absolute path
-                    rest.to_string()
+                    // Unix absolute path: restore leading slash
+                    format!("/{}", path_str)
                 }
             } else if let Some(stripped) = rest.strip_prefix('~') {
                 // Handle home directory expansion

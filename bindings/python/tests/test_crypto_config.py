@@ -10,7 +10,7 @@ def test_serialize_crypto_config():
         policy={"local": "package model\nallow = true"},
         tensors=["weight", "bias"],
     )
-    
+
     config_dict = config.to_dict()
     assert config_dict["enc_kid"] == "my-enc"
     assert config_dict["sign_kid"] == "my-sign"
@@ -21,10 +21,19 @@ def test_serialize_crypto_config():
 def test_serialize_crypto_config_minimal():
     """Test SerializeCryptoConfig with minimal parameters"""
     config = SerializeCryptoConfig(
-        enc_key={"alg": "aes256gcm", "kid": "test-enc", "k": "dGVzdC1rZXktMzItYnl0ZXMtbG9uZy1lbmNyeXB0aW9u"},
-        sign_key={"alg": "ed25519", "kid": "test-sign", "x": "dGVzdC1wdWJsaWMta2V5LTMyLWJ5dGVzLWxvbmctc2lnbmF0dXJl", "d": "dGVzdC1wcml2YXRlLWtleS0zMi1ieXRlcy1sb25nLXNpZ25hdHVyZQ"},
+        enc_key={
+            "alg": "aes256gcm",
+            "kid": "test-enc",
+            "k": "dGVzdC1rZXktMzItYnl0ZXMtbG9uZy1lbmNyeXB0aW9u",
+        },
+        sign_key={
+            "alg": "ed25519",
+            "kid": "test-sign",
+            "x": "dGVzdC1wdWJsaWMta2V5LTMyLWJ5dGVzLWxvbmctc2lnbmF0dXJl",
+            "d": "dGVzdC1wcml2YXRlLWtleS0zMi1ieXRlcy1sb25nLXNpZ25hdHVyZQ",
+        },
     )
-    
+
     config_dict = config.to_dict()
     assert "enc_key" in config_dict
     assert "sign_key" in config_dict
@@ -33,10 +42,19 @@ def test_serialize_crypto_config_minimal():
 def test_deserialize_crypto_config():
     """Test DeserializeCryptoConfig class"""
     config = DeserializeCryptoConfig(
-        enc_key={"alg": "aes256gcm", "kid": "test-enc", "k": "dGVzdC1rZXktMzItYnl0ZXMtbG9uZy1lbmNyeXB0aW9u"},
-        sign_key={"alg": "ed25519", "kid": "test-sign", "x": "dGVzdC1wdWJsaWMta2V5LTMyLWJ5dGVzLWxvbmctc2lnbmF0dXJl", "d": "dGVzdC1wcml2YXRlLWtleS0zMi1ieXRlcy1sb25nLXNpZ25hdHVyZQ"},
+        enc_key={
+            "alg": "aes256gcm",
+            "kid": "test-enc",
+            "k": "dGVzdC1rZXktMzItYnl0ZXMtbG9uZy1lbmNyeXB0aW9u",
+        },
+        sign_key={
+            "alg": "ed25519",
+            "kid": "test-sign",
+            "x": "dGVzdC1wdWJsaWMta2V5LTMyLWJ5dGVzLWxvbmctc2lnbmF0dXJl",
+            "d": "dGVzdC1wcml2YXRlLWtleS0zMi1ieXRlcy1sb25nLXNpZ25hdHVyZQ",
+        },
     )
-    
+
     config_dict = config.to_dict()
     assert "enc_key" in config_dict
     assert "sign_key" in config_dict
@@ -55,8 +73,19 @@ def test_serialize_config_with_provider():
     from cryptotensors import register_direct_key_provider, disable_provider
 
     keys = [
-        {"kty": "oct", "alg": "aes256gcm", "kid": "my-enc", "k": "dGVzdC1rZXktMzItYnl0ZXMtbG9uZy1lbmNyeXB0aW9u"},
-        {"kty": "okp", "alg": "ed25519", "kid": "my-sign", "x": "dGVzdC1wdWJsaWMta2V5LTMyLWJ5dGVzLWxvbmctc2lnbmF0dXJl", "d": "dGVzdC1wcml2YXRlLWtleS0zMi1ieXRlcy1sb25nLXNpZ25hdHVyZQ"},
+        {
+            "kty": "oct",
+            "alg": "aes256gcm",
+            "kid": "my-enc",
+            "k": "dGVzdC1rZXktMzItYnl0ZXMtbG9uZy1lbmNyeXB0aW9u",
+        },
+        {
+            "kty": "okp",
+            "alg": "ed25519",
+            "kid": "my-sign",
+            "x": "dGVzdC1wdWJsaWMta2V5LTMyLWJ5dGVzLWxvbmctc2lnbmF0dXJl",
+            "d": "dGVzdC1wcml2YXRlLWtleS0zMi1ieXRlcy1sb25nLXNpZ25hdHVyZQ",
+        },
     ]
 
     register_direct_key_provider(keys=keys)
@@ -76,8 +105,17 @@ def test_serialize_config_with_provider():
 def test_serialize_config_with_keys():
     """Test SerializeCryptoConfig with direct keys"""
     config = SerializeCryptoConfig(
-        enc_key={"alg": "aes256gcm", "kid": "direct-enc", "k": "dGVzdC1rZXktMzItYnl0ZXMtbG9uZy1lbmNyeXB0aW9u"},
-        sign_key={"alg": "ed25519", "kid": "direct-sign", "x": "dGVzdC1wdWJsaWMta2V5LTMyLWJ5dGVzLWxvbmctc2lnbmF0dXJl", "d": "dGVzdC1wcml2YXRlLWtleS0zMi1ieXRlcy1sb25nLXNpZ25hdHVyZQ"},
+        enc_key={
+            "alg": "aes256gcm",
+            "kid": "direct-enc",
+            "k": "dGVzdC1rZXktMzItYnl0ZXMtbG9uZy1lbmNyeXB0aW9u",
+        },
+        sign_key={
+            "alg": "ed25519",
+            "kid": "direct-sign",
+            "x": "dGVzdC1wdWJsaWMta2V5LTMyLWJ5dGVzLWxvbmctc2lnbmF0dXJl",
+            "d": "dGVzdC1wcml2YXRlLWtleS0zMi1ieXRlcy1sb25nLXNpZ25hdHVyZQ",
+        },
         enc_kid="direct-enc",
         sign_kid="direct-sign",
     )

@@ -335,7 +335,7 @@ fn rewrap_file(
         .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
 
     // Call safetensors crate function
-    rewrap_file_impl(&filename, old_deser_config.as_ref(), &new_ser_config)
+    rewrap_file_impl(&filename, &new_ser_config, old_deser_config.as_ref())
         .map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
 
     Ok(())
@@ -379,7 +379,7 @@ fn rewrap_header(
         .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
 
     // Call safetensors crate function
-    let result = rewrap_header_impl(buffer, old_deser_config.as_ref(), &new_ser_config)
+    let result = rewrap_header_impl(buffer, &new_ser_config, old_deser_config.as_ref())
         .map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
 
     Ok(result)
@@ -423,7 +423,7 @@ fn rewrap(
         .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
 
     // Call safetensors crate function
-    let result = rewrap_impl(buffer, old_deser_config.as_ref(), &new_ser_config)
+    let result = rewrap_impl(buffer, &new_ser_config, old_deser_config.as_ref())
         .map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
 
     Ok(result)

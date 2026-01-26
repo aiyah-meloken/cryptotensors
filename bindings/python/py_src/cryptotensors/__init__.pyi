@@ -34,7 +34,7 @@ def serialize(tensor_dict, metadata=None):
     pass
 
 @staticmethod
-def serialize_file(tensor_dict, filename, metadata=None):
+def serialize_file(tensor_dict, filename, metadata=None, config=None):
     """
     Serializes raw data into file.
 
@@ -46,10 +46,82 @@ def serialize_file(tensor_dict, filename, metadata=None):
             The name of the file to write into.
         metadata (`Dict[str, str]`, *optional*):
             The optional purely text annotations
+        config (`Dict[str, Any]` or `SerializeCryptoConfig`, *optional*):
+            Encryption configuration. If provided, the file will be encrypted.
 
     Returns:
         (`NoneType`):
             On success return None
+    """
+    pass
+
+@staticmethod
+def rewrap_file(filename, new_config, old_config=None):
+    """
+    Rewrap (re-encrypt) DEKs in an encrypted safetensors file with new keys.
+
+    This function reads an encrypted safetensors file, re-encrypts the data encryption keys (DEKs)
+    with new master keys, and writes the updated file back. The tensor data itself remains unchanged.
+
+    Args:
+        filename (`str` or `os.PathLike`):
+            Path to the encrypted safetensors file (will be modified in-place)
+        new_config (`Dict[str, Any]`):
+            Configuration for encryption with new keys (same format as SerializeCryptoConfig)
+        old_config (`Dict[str, Any]`, *optional*):
+            Configuration for decryption (None = use keys from file header)
+
+    Returns:
+        (`None`): Function modifies the file in-place
+
+    Raises:
+        `SafetensorError`: If rewrap fails
+    """
+    pass
+
+def rewrap_header(buffer, new_config, old_config=None):
+    """
+    Rewrap (re-encrypt) DEKs in an encrypted safetensors header with new keys.
+
+    This function takes header bytes, re-encrypts the data encryption keys (DEKs)
+    with new master keys, and returns the updated header bytes. The tensor data is not included.
+
+    Args:
+        buffer (`bytes`):
+            Header bytes from an encrypted safetensors file (should include 8-byte size prefix)
+        new_config (`Dict[str, Any]`):
+            Configuration for encryption with new keys (same format as SerializeCryptoConfig)
+        old_config (`Dict[str, Any]`, *optional*):
+            Configuration for decryption (None = use keys from header)
+
+    Returns:
+        (`bytes`): New header bytes with re-encrypted DEKs
+
+    Raises:
+        `SafetensorError`: If rewrap fails
+    """
+    pass
+
+def rewrap(buffer, new_config, old_config=None):
+    """
+    Rewrap (re-encrypt) DEKs in an encrypted safetensors file bytes with new keys.
+
+    This function takes complete file bytes, re-encrypts the data encryption keys (DEKs)
+    with new master keys, and returns the updated file bytes. The tensor data itself remains unchanged.
+
+    Args:
+        buffer (`bytes`):
+            Complete bytes of an encrypted safetensors file
+        new_config (`Dict[str, Any]`):
+            Configuration for encryption with new keys (same format as SerializeCryptoConfig)
+        old_config (`Dict[str, Any]`, *optional*):
+            Configuration for decryption (None = use keys from file header)
+
+    Returns:
+        (`bytes`): New file bytes with re-encrypted DEKs
+
+    Raises:
+        `SafetensorError`: If rewrap fails
     """
     pass
 
@@ -67,8 +139,12 @@ class safe_open:
 
         device (`str`, defaults to `"cpu"`):
             The device on which you want the tensors.
+
+        config (`Dict[str, Any]` or `DeserializeCryptoConfig`, optional):
+            Decryption configuration. If not provided, keys will be looked up from the global registry.
+            Supports direct keys via `enc_key` and `sign_key` parameters.
     """
-    def __init__(self, filename, framework, device=...):
+    def __init__(self, filename, framework, device=..., config=...):
         pass
 
     def __enter__(self):
@@ -173,3 +249,27 @@ class SafetensorError(Exception):
     """
     Custom Python Exception for Safetensor errors.
     """
+
+class SerializeCryptoConfig:
+    """
+    Serialization encryption configuration
+    """
+    def __init__(
+        self,
+        enc_key=None,
+        sign_key=None,
+        enc_kid=None,
+        enc_jku=None,
+        sign_kid=None,
+        sign_jku=None,
+        policy=None,
+        tensors=None,
+    ): ...
+    def to_dict(self): ...
+
+class DeserializeCryptoConfig:
+    """
+    Deserialization decryption configuration
+    """
+    def __init__(self, enc_key=None, sign_key=None): ...
+    def to_dict(self): ...

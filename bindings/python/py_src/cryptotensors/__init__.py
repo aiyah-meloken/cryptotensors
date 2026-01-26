@@ -11,6 +11,9 @@ from ._safetensors_rust import (  # noqa: F401
     _safe_open_handle,
     serialize,
     serialize_file,
+    rewrap_file,
+    rewrap_header,
+    rewrap,
     disable_provider,
     py_load_provider_native as _load_provider_native,
     _register_key_provider_internal,
@@ -48,9 +51,11 @@ def list_key_providers() -> list:
     return [ep.name for ep in eps]
 
 
-def register_tmp_key_provider(*, files=None, keys=None):
+def register_direct_key_provider(*, files=None, keys=None):
     """
-    Register temporary key provider (highest priority)
+    Register direct key provider (highest priority)
+
+    Creates a DirectKeyProvider and registers it to the global Registry with highest priority.
 
     Args:
         files: List of key file paths, Python handles reading and parsing
@@ -98,6 +103,94 @@ def register_tmp_key_provider(*, files=None, keys=None):
     _register_key_provider_internal(final_keys)
 
 
+# Backward compatibility alias
+register_tmp_key_provider = register_direct_key_provider
+
+
+class SerializeCryptoConfig:
+    """
+    Serialization encryption configuration
+
+    Key loading (two paths):
+    1. Direct keys (enc_key/sign_key) - if provided, use as-is and ignore enc_kid/enc_jku/sign_kid/sign_jku
+    2. Registry lookup (enc_kid/enc_jku/sign_kid/sign_jku) - when no direct keys, lookup from Registry
+       - Use register_direct_key_provider() to register keys to global Registry first
+    """
+
+    def __init__(
+        self,
+        enc_key=None,
+        sign_key=None,
+        enc_kid=None,
+        enc_jku=None,
+        sign_kid=None,
+        sign_jku=None,
+        policy=None,
+        tensors=None,
+    ):
+        """
+        Initialize SerializeCryptoConfig
+
+        Args:
+            enc_key (dict, optional): Encryption key (JWK format)
+            sign_key (dict, optional): Signing key (JWK format)
+            enc_kid (str, optional): Encryption key identifier
+            enc_jku (str, optional): Encryption key JWK URL
+            sign_kid (str, optional): Signing key identifier
+            sign_jku (str, optional): Signing key JWK URL
+            policy (dict, optional): Access policy {"local": "...", "remote": "..."}
+            tensors (list, optional): List of tensor names to encrypt (None = all)
+        """
+        self.config = {
+            "enc_key": enc_key,
+            "sign_key": sign_key,
+            "enc_kid": enc_kid,
+            "enc_jku": enc_jku,
+            "sign_kid": sign_kid,
+            "sign_jku": sign_jku,
+            "policy": policy,
+            "tensors": tensors,
+        }
+        # Remove None values
+        self.config = {k: v for k, v in self.config.items() if v is not None}
+
+    def to_dict(self):
+        """Convert to dict for internal use"""
+        return self.config
+
+
+class DeserializeCryptoConfig:
+    """
+    Deserialization decryption configuration (optional)
+
+    Key loading (two paths):
+    1. Direct keys (enc_key/sign_key) - if provided, use as-is and ignore kid/jku from header
+    2. Registry lookup - when no direct keys, lookup by kid/jku from header
+       - Use register_direct_key_provider() to register keys to global Registry first
+
+    Note: kid/jku are read from header for registry lookup, no need to specify here
+    """
+
+    def __init__(self, enc_key=None, sign_key=None):
+        """
+        Initialize DeserializeCryptoConfig
+
+        Args:
+            enc_key (dict, optional): Encryption key (JWK format)
+            sign_key (dict, optional): Signing key (JWK format)
+        """
+        self.config = {
+            "enc_key": enc_key,
+            "sign_key": sign_key,
+        }
+        # Remove None values
+        self.config = {k: v for k, v in self.config.items() if v is not None}
+
+    def to_dict(self):
+        """Convert to dict for internal use"""
+        return self.config
+
+
 __all__ = [
     "SafetensorError",
     "__version__",
@@ -106,8 +199,14 @@ __all__ = [
     "_safe_open_handle",
     "serialize",
     "serialize_file",
+    "rewrap_file",
+    "rewrap_header",
+    "rewrap",
     "disable_provider",
-    "register_tmp_key_provider",
+    "register_direct_key_provider",
+    "register_tmp_key_provider",  # Backward compatibility alias
     "init_key_provider",
     "list_key_providers",
+    "SerializeCryptoConfig",
+    "DeserializeCryptoConfig",
 ]

@@ -71,8 +71,9 @@ pub struct KeyMaterial {
     /// The algorithm used for encryption or signing
     pub alg: String,
 
+    /// Key identifier (kid)
     #[serde(skip_serializing_if = "Option::is_none")]
-    kid: Option<String>,
+    pub kid: Option<String>,
 
     /// The master key encoded in base64 for encryption
     #[serde(skip_serializing, default)]
@@ -91,8 +92,9 @@ pub struct KeyMaterial {
     #[serde(rename = "d")]
     pub d_priv: OnceCell<Option<String>>,
 
+    /// JWK Set URL (jku)
     #[serde(skip_serializing_if = "Option::is_none")]
-    jku: Option<String>,
+    pub jku: Option<String>,
 }
 
 impl KeyMaterial {
@@ -150,7 +152,7 @@ impl KeyMaterial {
     /// # Example
     ///
     /// ```no_run
-    /// use safetensors::key::KeyMaterial;
+    /// use cryptotensors::key::KeyMaterial;
     ///
     /// fn example() -> Result<(), Box<dyn std::error::Error>> {
     ///     // Set CRYPTOTENSOR_KEYS environment variable with JWK Set
@@ -199,7 +201,7 @@ impl KeyMaterial {
     }
 
     /// Update this key material from another key material
-    fn update_from_key(&self, key: &KeyMaterial) -> Result<(), CryptoTensorsError> {
+    pub(crate) fn update_from_key(&self, key: &KeyMaterial) -> Result<(), CryptoTensorsError> {
         // Update key fields based on key type
         match self.key_type {
             JwkKeyType::Oct => {
@@ -291,14 +293,14 @@ impl KeyMaterial {
         if !self.alg.is_empty() {
             match self.key_type {
                 JwkKeyType::Oct => {
-                    if EncryptionAlgorithm::from_str(&self.alg).is_none() {
+                    if self.alg.parse::<EncryptionAlgorithm>().is_err() {
                         return Err(CryptoTensorsError::InvalidAlgorithm(
                             "Invalid encryption algorithm".to_string(),
                         ));
                     }
                 }
                 JwkKeyType::Okp => {
-                    if SignatureAlgorithm::from_str(&self.alg).is_none() {
+                    if self.alg.parse::<SignatureAlgorithm>().is_err() {
                         return Err(CryptoTensorsError::InvalidAlgorithm(
                             "Invalid signature algorithm".to_string(),
                         ));
@@ -328,8 +330,9 @@ impl KeyMaterial {
         jku: Option<String>,
     ) -> Result<Self, CryptoTensorsError> {
         let alg = alg.unwrap_or_else(|| "aes256gcm".to_string());
-        let enc_alg = EncryptionAlgorithm::from_str(&alg)
-            .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(alg.clone()))?;
+        let enc_alg = alg
+            .parse::<EncryptionAlgorithm>()
+            .map_err(|_| CryptoTensorsError::InvalidAlgorithm(alg.clone()))?;
         let key_bytes = if let Some(ref b64_str) = key_b64 {
             let bytes = BASE64.decode(b64_str).map_err(|e| {
                 CryptoTensorsError::InvalidKey(format!("Invalid base64 key: {}", e))
@@ -372,8 +375,9 @@ impl KeyMaterial {
         jku: Option<String>,
     ) -> Result<Self, CryptoTensorsError> {
         let alg = alg.unwrap_or_else(|| "ed25519".to_string());
-        let sig_alg = SignatureAlgorithm::from_str(&alg)
-            .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(alg.clone()))?;
+        let sig_alg = alg
+            .parse::<SignatureAlgorithm>()
+            .map_err(|_| CryptoTensorsError::InvalidAlgorithm(alg.clone()))?;
         match sig_alg {
             SignatureAlgorithm::Ed25519 => {
                 let public = if let Some(pub_b64) = public_b64 {
@@ -569,5 +573,121 @@ impl KeyMaterial {
         })?;
 
         Ok(key_material)
+    }
+
+    /// Create KeyMaterial from JWK JSON string
+    ///
+    /// # Arguments
+    /// * `jwk_json` - JSON string containing JWK
+    /// * `is_for_save` - Whether this key will be used for saving (requires full key material)
+    ///
+    /// # Returns
+    /// * `Ok(KeyMaterial)` - Successfully created key material
+    /// * `Err(CryptoTensorsError)` - If parsing fails
+    pub fn from_jwk_str(jwk_json: &str, is_for_save: bool) -> Result<Self, CryptoTensorsError> {
+        let jwk_value: serde_json::Value = serde_json::from_str(jwk_json)
+            .map_err(|e| CryptoTensorsError::InvalidKey(format!("Invalid JSON: {}", e)))?;
+        Self::from_jwk(&jwk_value, is_for_save)
+    }
+
+    /// Get kid (key identifier)
+    pub fn kid(&self) -> Option<&str> {
+        self.kid.as_deref()
+    }
+
+    /// Get jku (JWK Set URL)
+    pub fn jku(&self) -> Option<&str> {
+        self.jku.as_deref()
+    }
+
+    /// Set kid (key identifier)
+    pub fn set_kid(&mut self, kid: &str) {
+        self.kid = Some(kid.to_string());
+    }
+
+    /// Set jku (JWK Set URL)
+    pub fn set_jku(&mut self, jku: &str) {
+        self.jku = Some(jku.to_string());
+    }
+}
+
+/// Key role: which key to fetch and which Provider/Registry method to use.
+#[derive(Clone, Copy)]
+pub enum KeyRole {
+    /// Encryption master key; use `get_master_key`.
+    Master,
+    /// Signing private key; use `get_signing_key`.
+    Signing,
+    /// Verification public key; use `get_verify_key`.
+    Verify,
+}
+
+impl KeyRole {
+    fn missing_key_message(&self) -> &'static str {
+        match self {
+            KeyRole::Master => "encryption key required: provide enc_key or use registry (enc_kid)",
+            KeyRole::Signing => "signing key required: provide sign_key or use registry (sign_kid)",
+            KeyRole::Verify => {
+                "verification key required: provide sign_key or use registry (sign_kid)"
+            }
+        }
+    }
+}
+
+/// Parameters for a single key lookup. Built from config (serialize or deserialize) + optional header key.
+/// KeyProvider is only used via Registry registration; config never passes a provider.
+pub struct KeyLookupParams<'a> {
+    /// Directly provided key; takes precedence. When set, kid/jku are ignored.
+    pub direct: Option<&'a KeyMaterial>,
+    /// JWK Set URL for registry lookup (when no direct key).
+    pub jku: Option<&'a str>,
+    /// Key ID for registry lookup (when no direct key).
+    pub kid: Option<&'a str>,
+    /// Whether fallback to global registry is allowed.
+    pub registry_allowed: bool,
+}
+
+/// **Single source of truth for key load order.** Adjust resolution logic here only.
+/// Order: direct → registry (if allowed) → error. KeyProvider is used only via Registry registration.
+pub fn resolve_key(
+    role: KeyRole,
+    params: &KeyLookupParams<'_>,
+    for_creation: bool,
+) -> Result<KeyMaterial, CryptoTensorsError> {
+    if let Some(k) = params.direct {
+        return Ok(k.clone());
+    }
+    let jwk = if params.registry_allowed {
+        match role {
+            KeyRole::Master => registry::get_master_key(params.jku, params.kid)?,
+            KeyRole::Signing => registry::get_signing_key(params.jku, params.kid)?,
+            KeyRole::Verify => registry::get_verify_key(params.jku, params.kid)?,
+        }
+    } else {
+        return Err(CryptoTensorsError::KeyLoad(
+            role.missing_key_message().to_string(),
+        ));
+    };
+    KeyMaterial::from_jwk(&jwk, for_creation)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keymaterial_convenience_methods() {
+        // Test from_jwk_str
+        let jwk_json = r#"{"kty":"oct","alg":"aes256gcm","kid":"test","k":"dGVzdC1rZXktMzItYnl0ZXMtbG9uZy1lbmNyeXB0aW9u"}"#;
+        let key = KeyMaterial::from_jwk_str(jwk_json, false).unwrap();
+        assert_eq!(key.kid(), Some("test"));
+        assert_eq!(key.alg, "aes256gcm");
+
+        // Test setters
+        let mut key = KeyMaterial::new_enc_key(None, None, None, None).unwrap();
+        key.set_kid("new-kid");
+        key.set_jku("file:///new/path.jwk");
+        assert_eq!(key.kid(), Some("new-kid"));
+        assert_eq!(key.jku(), Some("file:///new/path.jwk"));
     }
 }

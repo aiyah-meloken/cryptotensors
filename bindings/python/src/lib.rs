@@ -27,10 +27,10 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 // MODIFIED: CryptoTensors imports for encryption/decryption support
-use cryptotensors::cryptotensors::{CryptoTensors, SerializeCryptoConfig};
+use cryptotensors::cryptotensors::{CryptoTensors, DeserializeCryptoConfig, SerializeCryptoConfig};
 use cryptotensors::key::KeyMaterial;
 use cryptotensors::policy::AccessPolicy;
-use cryptotensors::registry::{self, load_provider_native, TempKeyProvider, PRIORITY_TEMP};
+use cryptotensors::registry::{self, load_provider_native, DirectKeyProvider, PRIORITY_DIRECT};
 
 /// MODIFIED: Load a native provider from a shared library.
 #[pyfunction]
@@ -46,16 +46,45 @@ fn disable_provider(name: &str) -> PyResult<()> {
     Ok(())
 }
 
-/// MODIFIED: Internal function to register a temporary key provider with parsed keys.
+/// MODIFIED: Internal function to register a direct key provider with parsed keys.
 #[pyfunction]
 fn _register_key_provider_internal(keys: Vec<PyBound<PyAny>>) -> PyResult<()> {
-    let mut json_keys = Vec::with_capacity(keys.len());
+    let mut provider = DirectKeyProvider::new();
+
+    // Parse keys and add to provider
     for key in keys {
-        json_keys.push(pyany_to_json(&key)?);
+        let json_key = pyany_to_json(&key)?;
+
+        // Determine key type and add appropriately
+        let kty = json_key
+            .get("kty")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| SafetensorError::new_err("Missing 'kty' in key"))?
+            .to_string();
+
+        let kid = json_key
+            .get("kid")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| SafetensorError::new_err("Missing 'kid' in key"))?
+            .to_string();
+
+        match kty.as_str() {
+            "oct" => {
+                provider.add_enc_key(&kid, json_key);
+            }
+            "okp" => {
+                provider.add_sign_key(&kid, json_key);
+            }
+            _ => {
+                return Err(SafetensorError::new_err(format!(
+                    "Unsupported key type: {}",
+                    kty
+                )));
+            }
+        }
     }
 
-    let provider = TempKeyProvider::new(json_keys);
-    registry::register_provider_with_priority(Box::new(provider), PRIORITY_TEMP);
+    registry::register_provider_with_priority(Box::new(provider), PRIORITY_DIRECT);
     Ok(())
 }
 
@@ -268,6 +297,171 @@ fn serialize_file(
     Ok(())
 }
 
+/// Rewrap (re-encrypt) DEKs in an encrypted safetensors file with new keys
+///
+/// This function reads an encrypted safetensors file, re-encrypts the data encryption keys (DEKs)
+/// with new master keys, and writes the updated file back. The tensor data itself remains unchanged.
+///
+/// Args:
+///     filename (`str` or `Path`):
+///         Path to the encrypted safetensors file (will be modified in-place)
+///     new_config (`Dict[str, Any]`):
+///         Configuration for encryption with new keys
+///     old_config (`Dict[str, Any]`, *optional*):
+///         Configuration for decryption (None = use keys from file header)
+///
+/// Returns:
+///     (`None`): Function modifies the file in-place
+///
+/// Raises:
+///     `SafetensorError`: If rewrap fails
+#[pyfunction]
+#[pyo3(signature = (filename, new_config, old_config=None))]
+fn rewrap_file(
+    filename: PathBuf,
+    new_config: PyBound<PyAny>,
+    old_config: Option<PyBound<PyAny>>,
+) -> PyResult<()> {
+    use cryptotensors::rewrap_file as rewrap_file_impl;
+
+    // Prepare configs
+    let old_deser_config = if let Some(cfg) = old_config.as_ref() {
+        prepare_deserialize_crypto(cfg)?
+    } else {
+        None
+    };
+
+    let new_ser_config = prepare_crypto(Some(new_config))?
+        .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
+
+    // Call safetensors crate function
+    rewrap_file_impl(&filename, old_deser_config.as_ref(), &new_ser_config)
+        .map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
+
+    Ok(())
+}
+
+/// Rewrap (re-encrypt) DEKs in an encrypted safetensors header with new keys
+///
+/// This function takes header bytes, re-encrypts the data encryption keys (DEKs)
+/// with new master keys, and returns the updated header bytes. The tensor data is not included.
+///
+/// Args:
+///     buffer (`bytes`):
+///         Header bytes from an encrypted safetensors file (should include 8-byte size prefix)
+///     new_config (`Dict[str, Any]`):
+///         Configuration for encryption with new keys
+///     old_config (`Dict[str, Any]`, *optional*):
+///         Configuration for decryption (None = use keys from header)
+///
+/// Returns:
+///     (`bytes`): New header bytes with re-encrypted DEKs
+///
+/// Raises:
+///     `SafetensorError`: If rewrap fails
+#[pyfunction]
+#[pyo3(signature = (buffer, new_config, old_config=None))]
+fn rewrap_header(
+    buffer: &[u8],
+    new_config: PyBound<PyAny>,
+    old_config: Option<PyBound<PyAny>>,
+) -> PyResult<Vec<u8>> {
+    use cryptotensors::rewrap_header as rewrap_header_impl;
+
+    // Prepare configs
+    let old_deser_config = if let Some(cfg) = old_config.as_ref() {
+        prepare_deserialize_crypto(cfg)?
+    } else {
+        None
+    };
+
+    let new_ser_config = prepare_crypto(Some(new_config))?
+        .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
+
+    // Call safetensors crate function
+    let result = rewrap_header_impl(buffer, old_deser_config.as_ref(), &new_ser_config)
+        .map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
+
+    Ok(result)
+}
+
+/// Rewrap (re-encrypt) DEKs in an encrypted safetensors file bytes with new keys
+///
+/// This function takes complete file bytes, re-encrypts the data encryption keys (DEKs)
+/// with new master keys, and returns the updated file bytes. The tensor data itself remains unchanged.
+///
+/// Args:
+///     buffer (`bytes`):
+///         Complete bytes of an encrypted safetensors file
+///     new_config (`Dict[str, Any]`):
+///         Configuration for encryption with new keys
+///     old_config (`Dict[str, Any]`, *optional*):
+///         Configuration for decryption (None = use keys from file header)
+///
+/// Returns:
+///     (`bytes`): New file bytes with re-encrypted DEKs
+///
+/// Raises:
+///     `SafetensorError`: If rewrap fails
+#[pyfunction]
+#[pyo3(signature = (buffer, new_config, old_config=None))]
+fn rewrap(
+    buffer: &[u8],
+    new_config: PyBound<PyAny>,
+    old_config: Option<PyBound<PyAny>>,
+) -> PyResult<Vec<u8>> {
+    use cryptotensors::rewrap as rewrap_impl;
+
+    // Prepare configs
+    let old_deser_config = if let Some(cfg) = old_config.as_ref() {
+        prepare_deserialize_crypto(cfg)?
+    } else {
+        None
+    };
+
+    let new_ser_config = prepare_crypto(Some(new_config))?
+        .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
+
+    // Call safetensors crate function
+    let result = rewrap_impl(buffer, old_deser_config.as_ref(), &new_ser_config)
+        .map_err(|e| SafetensorError::new_err(format!("Rewrap failed: {}", e)))?;
+
+    Ok(result)
+}
+
+/// Parse Python dict to DeserializeCryptoConfig
+fn prepare_deserialize_crypto(
+    config: &PyBound<PyAny>,
+) -> PyResult<Option<DeserializeCryptoConfig>> {
+    if config.is_instance_of::<pyo3::types::PyNone>() {
+        return Ok(None);
+    }
+    let config_dict = config.downcast::<PyDict>()?;
+
+    let mut deser_config = DeserializeCryptoConfig::new();
+
+    // Direct keys
+    if let Some(enc_key_any) = config_dict.get_item("enc_key")? {
+        let enc_key_dict = enc_key_any.downcast::<PyDict>()?;
+        let enc_key = pykeymaterial_from_dict("enc", enc_key_dict)?;
+        deser_config.enc_key = Some(enc_key);
+    }
+
+    if let Some(sign_key_any) = config_dict.get_item("sign_key")? {
+        let sign_key_dict = sign_key_any.downcast::<PyDict>()?;
+        let sign_key = pykeymaterial_from_dict("sign", sign_key_dict)?;
+        deser_config.sign_key = Some(sign_key);
+    }
+
+    // Key loading order:
+    // 1. Direct keys (enc_key/sign_key) - if provided, use as-is and ignore kid/jku from header
+    // 2. Registry - when no direct keys, lookup by kid/jku from header
+    //    Registry supports multiple KeyProvider types (DirectKeyProvider, EnvKeyProvider, FileKeyProvider, NativeKeyProvider, etc.)
+    //    Python's register_direct_key_provider() only registers DirectKeyProvider; other providers are registered via Rust API or auto-registered
+
+    Ok(Some(deser_config))
+}
+
 /// MODIFIED: Parse Python dict to SerializeCryptoConfig for encryption.
 fn prepare_crypto(config: Option<PyBound<PyAny>>) -> PyResult<Option<SerializeCryptoConfig>> {
     let Some(config) = config else {
@@ -278,48 +472,61 @@ fn prepare_crypto(config: Option<PyBound<PyAny>>) -> PyResult<Option<SerializeCr
     }
     let config_dict = config.downcast::<PyDict>()?;
 
-    // tensors: Optional[List[str]]
-    let tensors = match config_dict.get_item("tensors")? {
-        Some(val) => Some(val.extract::<Vec<String>>()?),
-        None => None,
-    };
+    let mut ser_config = SerializeCryptoConfig::new();
 
-    // enc_key: dict
-    let enc_key_any = config_dict
-        .get_item("enc_key")?
-        .ok_or_else(|| SafetensorError::new_err("Missing 'enc_key' in config"))?;
-    let enc_key_dict = enc_key_any.downcast::<PyDict>()?;
-    let enc_key = pykeymaterial_from_dict("enc", enc_key_dict)?;
+    // Key loading order:
+    // 1. Direct keys (enc_key/sign_key) - if provided, use as-is and ignore enc_kid/enc_jku/sign_kid/sign_jku
+    // 2. Registry - when no direct keys, lookup by enc_kid/enc_jku/sign_kid/sign_jku
+    //    Registry supports multiple KeyProvider types (DirectKeyProvider, EnvKeyProvider, FileKeyProvider, NativeKeyProvider, etc.)
+    //    Python's register_direct_key_provider() only registers DirectKeyProvider; other providers are registered via Rust API or auto-registered
 
-    // sign_key: dict
-    let sign_key_any = config_dict
-        .get_item("sign_key")?
-        .ok_or_else(|| SafetensorError::new_err("Missing 'sign_key' in config"))?;
-    let sign_key_dict = sign_key_any.downcast::<PyDict>()?;
-    let sign_key = pykeymaterial_from_dict("sign", sign_key_dict)?;
+    // Method 1: Direct keys (enc_key and sign_key)
+    if let Some(enc_key_any) = config_dict.get_item("enc_key")? {
+        let enc_key_dict = enc_key_any.downcast::<PyDict>()?;
+        let enc_key = pykeymaterial_from_dict("enc", enc_key_dict)?;
+        ser_config.enc_key = Some(enc_key);
+    }
 
-    // policy: dict (optional)
-    let policy = match config_dict.get_item("policy")? {
-        Some(val) => {
-            let policy_dict = val.downcast::<PyDict>()?;
-            let local = match policy_dict.get_item("local")? {
-                Some(v) => Some(v.extract::<String>()?),
-                None => None,
-            };
-            let remote = match policy_dict.get_item("remote")? {
-                Some(v) => Some(v.extract::<String>()?),
-                None => None,
-            };
-            AccessPolicy::new(local, remote)
-        }
-        None => AccessPolicy::new(None, None),
-    };
+    if let Some(sign_key_any) = config_dict.get_item("sign_key")? {
+        let sign_key_dict = sign_key_any.downcast::<PyDict>()?;
+        let sign_key = pykeymaterial_from_dict("sign", sign_key_dict)?;
+        ser_config.sign_key = Some(sign_key);
+    }
 
-    let config = SerializeCryptoConfig::new("1".to_string(), tensors, enc_key, sign_key, policy)
-        .map_err(|e| {
-            SafetensorError::new_err(format!("Failed to build SerializeCryptoConfig: {e}"))
-        })?;
-    Ok(Some(config))
+    // Key identifiers
+    if let Some(enc_kid) = config_dict.get_item("enc_kid")? {
+        ser_config.enc_kid = Some(enc_kid.extract::<String>()?);
+    }
+    if let Some(enc_jku) = config_dict.get_item("enc_jku")? {
+        ser_config.enc_jku = Some(enc_jku.extract::<String>()?);
+    }
+    if let Some(sign_kid) = config_dict.get_item("sign_kid")? {
+        ser_config.sign_kid = Some(sign_kid.extract::<String>()?);
+    }
+    if let Some(sign_jku) = config_dict.get_item("sign_jku")? {
+        ser_config.sign_jku = Some(sign_jku.extract::<String>()?);
+    }
+
+    // Policy
+    if let Some(policy_any) = config_dict.get_item("policy")? {
+        let policy_dict = policy_any.downcast::<PyDict>()?;
+        let local = match policy_dict.get_item("local")? {
+            Some(v) => Some(v.extract::<String>()?),
+            None => None,
+        };
+        let remote = match policy_dict.get_item("remote")? {
+            Some(v) => Some(v.extract::<String>()?),
+            None => None,
+        };
+        ser_config.policy = Some(AccessPolicy::new(local, remote));
+    }
+
+    // Tensor filter
+    if let Some(tensors_any) = config_dict.get_item("tensors")? {
+        ser_config.tensor_filter = Some(tensors_any.extract::<Vec<String>>()?);
+    }
+
+    Ok(Some(ser_config))
 }
 
 /// MODIFIED: Convert a Python dict to KeyMaterial.
@@ -657,7 +864,12 @@ struct Open {
 
 impl Open {
     /// MODIFIED: Added crypto parsing from header for decryption support.
-    fn new(filename: PathBuf, framework: Framework, device: Option<Device>) -> PyResult<Self> {
+    fn new(
+        filename: PathBuf,
+        framework: Framework,
+        device: Option<Device>,
+        config: Option<DeserializeCryptoConfig>,
+    ) -> PyResult<Self> {
         let file = File::open(&filename).map_err(|_| {
             PyFileNotFoundError::new_err(format!(
                 "No such file or directory: {}",
@@ -684,10 +896,13 @@ impl Open {
 
         let offset = n + 8;
 
-        // MODIFIED: Parse crypto info from header (if encrypted file)
-        let crypto = cryptotensors::cryptotensors::CryptoTensors::from_header(&metadata)
-            .map_err(|e| SafetensorError::new_err(format!("Error parsing CryptoTensors: {e:?}")))?
-            .map(Arc::new);
+        // MODIFIED: Parse crypto info from header with config (if encrypted file)
+        let crypto = cryptotensors::cryptotensors::CryptoTensors::from_header_with_config(
+            &metadata,
+            config.as_ref(),
+        )
+        .map_err(|e| SafetensorError::new_err(format!("Error parsing CryptoTensors: {e:?}")))?
+        .map(Arc::new);
 
         Python::with_gil(|py| -> PyResult<()> {
             match framework {
@@ -1238,9 +1453,19 @@ impl safe_open {
 #[pymethods]
 impl safe_open {
     #[new]
-    #[pyo3(signature = (filename, framework, device=Some(Device::Cpu)))]
-    fn new(filename: PathBuf, framework: Framework, device: Option<Device>) -> PyResult<Self> {
-        let inner = Some(Open::new(filename, framework, device)?);
+    #[pyo3(signature = (filename, framework, device=Some(Device::Cpu), config=None))]
+    fn new(
+        filename: PathBuf,
+        framework: Framework,
+        device: Option<Device>,
+        config: Option<PyBound<PyAny>>,
+    ) -> PyResult<Self> {
+        let deser_config = if let Some(c) = config {
+            prepare_deserialize_crypto(&c)?
+        } else {
+            None
+        };
+        let inner = Some(Open::new(filename, framework, device, deser_config)?);
         Ok(Self { inner })
     }
 
@@ -1940,15 +2165,25 @@ impl _safe_open_handle {
 #[pymethods]
 impl _safe_open_handle {
     #[new]
-    #[pyo3(signature = (f, framework, device=Some(Device::Cpu)))]
-    fn new(f: PyObject, framework: Framework, device: Option<Device>) -> PyResult<Self> {
+    #[pyo3(signature = (f, framework, device=Some(Device::Cpu), config=None))]
+    fn new(
+        f: PyObject,
+        framework: Framework,
+        device: Option<Device>,
+        config: Option<PyBound<PyAny>>,
+    ) -> PyResult<Self> {
         let filename = Python::with_gil(|py| -> PyResult<PathBuf> {
             let _ = f.getattr(py, "fileno")?;
             let filename = f.getattr(py, "name")?;
             let filename: PathBuf = filename.extract(py)?;
             Ok(filename)
         })?;
-        let inner = Some(Open::new(filename, framework, device)?);
+        let deser_config = if let Some(c) = config {
+            prepare_deserialize_crypto(&c)?
+        } else {
+            None
+        };
+        let inner = Some(Open::new(filename, framework, device, deser_config)?);
         Ok(Self { inner })
     }
 
@@ -2039,6 +2274,9 @@ fn _safetensors_rust(m: &PyBound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(serialize, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_file, m)?)?;
     m.add_function(wrap_pyfunction!(deserialize, m)?)?;
+    m.add_function(wrap_pyfunction!(rewrap_file, m)?)?;
+    m.add_function(wrap_pyfunction!(rewrap_header, m)?)?;
+    m.add_function(wrap_pyfunction!(rewrap, m)?)?;
     m.add_function(wrap_pyfunction!(py_load_provider_native, m)?)?;
     m.add_function(wrap_pyfunction!(disable_provider, m)?)?;
     m.add_function(wrap_pyfunction!(_register_key_provider_internal, m)?)?;

@@ -62,29 +62,52 @@ pip install -e .
 
 ## Basic Usage (Encryption and Decryption)
 
-To encrypt tensors during serialization, you need to provide encryption and signing keys in the `config` parameter.
+### 🆕 v0.2 New Config API
+
+CryptoTensors 0.2 introduces a new, more flexible configuration system:
 
 ```python
 import torch
-from cryptotensors.torch import save_file, load_file
+from cryptotensors import SerializeCryptoConfig, save_file
+from cryptotensors.torch import load_file
 
 tensors = {
    "weight1": torch.zeros((1024, 1024)),
    "weight2": torch.zeros((1024, 1024))
 }
 
-# Encrypt and save
+# Method 1: Direct keys (simple scenarios)
+config = SerializeCryptoConfig(
+    enc_key={"alg": "aes256gcm", "kid": "my-enc", "k": "base64-encoded-key"},
+    sign_key={"alg": "ed25519", "kid": "my-sign", "x": "...", "d": "..."}
+)
+save_file(tensors, "model.cryptotensors", config=config.to_dict())
+
+# Method 2: Using kid/jku (with global Registry)
+from cryptotensors import register_direct_key_provider
+
+register_direct_key_provider(files=["keys.jwk"])  # Register keys once
+config = SerializeCryptoConfig(enc_kid="my-enc", sign_kid="my-sign")
+save_file(tensors, "model.cryptotensors", config=config.to_dict())
+
+# Load encrypted file (keys auto-retrieved from Registry)
+tensors = load_file("model.cryptotensors")
+```
+
+### Classic API (Still Supported)
+
+The classic dict-based configuration is still fully supported:
+
+```python
+# Old API still works
 config = {
     "enc_key": enc_key,    # JWK format encryption key
     "sign_key": sign_key,  # JWK format signing key
 }
 save_file(tensors, "model.cryptotensors", config=config)
-
-# Load encrypted file (keys retrieved from key provider)
-tensors = load_file("model.cryptotensors")
 ```
 
-See the [documentation](https://aiyah-meloken.github.io/cryptotensors/) for detailed guides on encryption, key management, and integration examples.
+See [`KEY_MANAGEMENT_GUIDE.md`](KEY_MANAGEMENT_GUIDE.md) for detailed key management guide and [documentation](https://aiyah-meloken.github.io/cryptotensors/) for more examples.
 
 ## Backward Compatibility (Safetensors Compatible)
 

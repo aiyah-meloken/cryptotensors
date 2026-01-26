@@ -5,7 +5,7 @@
 // This file is NEW and was not present in the original safetensors project.
 
 use crate::encryption::{decrypt_data, encrypt_data, EncryptionAlgorithm};
-use crate::key::{KeyMaterial, ValidateMode};
+use crate::key::{resolve_key, KeyLookupParams, KeyMaterial, KeyRole, ValidateMode};
 use crate::policy::AccessPolicy;
 use crate::signing::{sign_data, verify_signature, SignatureAlgorithm};
 use crate::tensor::{Metadata, TensorInfo};
@@ -17,6 +17,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 use zeroize::Zeroizing;
+
+// ============================================================================
+// Version Constants
+// ============================================================================
+
+/// Supported CryptoTensors format version
+pub const CRYPTOTENSORS_VERSION: &str = "1";
 
 // ============================================================================
 // Error Types - Organized by category using thiserror
@@ -213,45 +220,128 @@ mod cryptor_serde {
 }
 
 /// Configuration for serializing tensors with encryption
+///
+/// Key loading: (1) Direct keys (`enc_key`/`sign_key`) — use as-is, ignore kid/jku.
+/// (2) Registry — when no direct keys, use `enc_kid`/`enc_jku`/`sign_kid`/`sign_jku` to lookup.
+#[derive(Default)]
 pub struct SerializeCryptoConfig {
-    /// CryptoTensors version
-    version: String,
-    /// The names of the tensors to encrypt
-    tensors: Option<Vec<String>>,
-    /// The key material for encryption
-    enc_key: KeyMaterial,
-    /// The key material for signing
-    sign_key: KeyMaterial,
-    /// Access policy for model loading and KMS validation
-    policy: AccessPolicy,
+    /// Directly provided encryption key. When set, enc_kid/enc_jku are ignored.
+    pub enc_key: Option<KeyMaterial>,
+    /// Directly provided signing key. When set, sign_kid/sign_jku are ignored.
+    pub sign_key: Option<KeyMaterial>,
+
+    /// Encryption key identifier (registry lookup when no direct keys)
+    pub enc_kid: Option<String>,
+    /// Encryption key JWK URL (registry lookup)
+    pub enc_jku: Option<String>,
+    /// Signing key identifier (registry lookup)
+    pub sign_kid: Option<String>,
+    /// Signing key JWK URL (registry lookup)
+    pub sign_jku: Option<String>,
+
+    /// Access policy
+    pub policy: Option<AccessPolicy>,
+
+    /// Tensors to encrypt (None = all)
+    pub tensor_filter: Option<Vec<String>>,
 }
 
 impl SerializeCryptoConfig {
-    /// Create a new configuration for serializing tensors with encryption
-    pub fn new(
-        version: String,
-        tensors: Option<Vec<String>>,
-        enc_key: KeyMaterial,
-        sign_key: KeyMaterial,
-        policy: AccessPolicy,
-    ) -> Result<Self, CryptoTensorsError> {
-        if version != "1" {
-            return Err(CryptoTensorsError::UnsupportedVersion(version));
-        }
-        enc_key.validate(ValidateMode::ForCreation)?;
-        sign_key.validate(ValidateMode::ForCreation)?;
-        Ok(Self {
-            tensors,
-            enc_key,
-            sign_key,
-            policy,
-            version,
-        })
+    /// Create a new empty configuration
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Use directly provided keys
+    pub fn with_keys(enc_key: KeyMaterial, sign_key: KeyMaterial) -> Self {
+        let mut config = Self::new();
+        config.enc_key = Some(enc_key);
+        config.sign_key = Some(sign_key);
+        config
+    }
+
+    /// Only specify kid (lookup from global Registry)
+    pub fn with_kids(enc_kid: &str, sign_kid: &str) -> Self {
+        let mut config = Self::new();
+        config.enc_kid = Some(enc_kid.to_string());
+        config.sign_kid = Some(sign_kid.to_string());
+        config
+    }
+
+    // Builder methods
+    /// Set encryption key identifier
+    pub fn enc_kid(mut self, kid: &str) -> Self {
+        self.enc_kid = Some(kid.to_string());
+        self
+    }
+    /// Set signing key identifier
+    pub fn sign_kid(mut self, kid: &str) -> Self {
+        self.sign_kid = Some(kid.to_string());
+        self
+    }
+    /// Set encryption key JWK URL
+    pub fn enc_jku(mut self, jku: &str) -> Self {
+        self.enc_jku = Some(jku.to_string());
+        self
+    }
+    /// Set signing key JWK URL
+    pub fn sign_jku(mut self, jku: &str) -> Self {
+        self.sign_jku = Some(jku.to_string());
+        self
+    }
+    /// Set access policy
+    pub fn policy(mut self, policy: AccessPolicy) -> Self {
+        self.policy = Some(policy);
+        self
+    }
+    /// Set tensor filter
+    pub fn tensor_filter(mut self, filter: Vec<String>) -> Self {
+        self.tensor_filter = Some(filter);
+        self
     }
 }
 
+/// Configuration for deserialization (optional)
+///
+/// Key loading: (1) Direct keys — use as-is. (2) Registry — when no direct keys, lookup by kid/jku from header.
+#[derive(Default)]
+pub struct DeserializeCryptoConfig {
+    /// Directly provided encryption key. When set, registry is not used.
+    pub enc_key: Option<KeyMaterial>,
+    /// Directly provided signing key. When set, registry is not used.
+    pub sign_key: Option<KeyMaterial>,
+    // kid/jku are read from header for registry lookup
+}
+
+impl DeserializeCryptoConfig {
+    /// Create a new empty configuration
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Use directly provided keys
+    pub fn with_keys(enc_key: KeyMaterial, sign_key: KeyMaterial) -> Self {
+        let mut config = Self::new();
+        config.enc_key = Some(enc_key);
+        config.sign_key = Some(sign_key);
+        config
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SerializeKeyKind {
+    Enc,
+    Sign,
+}
+
+#[derive(Clone, Copy)]
+enum DeserializeKeyKind {
+    Enc,
+    Sign,
+}
+
 /// Information about encrypted tensor data and methods for encryption/decryption
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SingleCryptor<'data> {
     /// Algorithm used for encryption
     #[serde(skip)]
@@ -294,8 +384,10 @@ impl<'data> SingleCryptor<'data> {
     /// * `Ok(Self)` - If the key material contains valid encryption key
     /// * `Err(CryptoTensorsError)` - If the key material is invalid or missing required key
     fn new(key_material: &KeyMaterial) -> Result<Self, CryptoTensorsError> {
-        let alg = EncryptionAlgorithm::from_str(&key_material.alg)
-            .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(key_material.alg.clone()))?;
+        let alg = key_material
+            .alg
+            .parse::<EncryptionAlgorithm>()
+            .map_err(|_| CryptoTensorsError::InvalidAlgorithm(key_material.alg.clone()))?;
         let master_key = key_material.get_master_key_bytes()?;
 
         Ok(Self {
@@ -323,8 +415,10 @@ impl<'data> SingleCryptor<'data> {
     /// * `InvalidAlgorithm` - If the algorithm name is not supported
     /// * `RandomGeneration` - If random number generation fails
     fn random_key(&self) -> Result<Vec<u8>, CryptoTensorsError> {
-        let algo = EncryptionAlgorithm::from_str(&self.enc_algo)
-            .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(self.enc_algo.clone()))?;
+        let algo = self
+            .enc_algo
+            .parse::<EncryptionAlgorithm>()
+            .map_err(|_| CryptoTensorsError::InvalidAlgorithm(self.enc_algo.clone()))?;
 
         let mut key = vec![0u8; algo.key_len()];
         let rng = rand::SystemRandom::new();
@@ -381,7 +475,7 @@ impl<'data> SingleCryptor<'data> {
 
         let mut data_key =
             BASE64
-                .decode(&self.wrapped_key.get().ok_or_else(|| {
+                .decode(self.wrapped_key.get().ok_or_else(|| {
                     CryptoTensorsError::KeyUnwrap("wrapped_key is empty".to_string())
                 })?)
                 .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
@@ -391,7 +485,7 @@ impl<'data> SingleCryptor<'data> {
             &self.enc_algo,
             BASE64
                 .decode(
-                    &self.key_iv.get().ok_or_else(|| {
+                    self.key_iv.get().ok_or_else(|| {
                         CryptoTensorsError::KeyUnwrap("key_iv is empty".to_string())
                     })?,
                 )
@@ -399,7 +493,7 @@ impl<'data> SingleCryptor<'data> {
                 .as_slice(),
             BASE64
                 .decode(
-                    &self.key_tag.get().ok_or_else(|| {
+                    self.key_tag.get().ok_or_else(|| {
                         CryptoTensorsError::KeyUnwrap("key_tag is empty".to_string())
                     })?,
                 )
@@ -435,13 +529,13 @@ impl<'data> SingleCryptor<'data> {
                     data_key.as_slice(),
                     &self.enc_algo,
                     BASE64
-                        .decode(&self.iv.get().ok_or_else(|| {
+                        .decode(self.iv.get().ok_or_else(|| {
                             CryptoTensorsError::KeyUnwrap("iv is empty".to_string())
                         })?)
                         .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
                         .as_slice(),
                     BASE64
-                        .decode(&self.tag.get().ok_or_else(|| {
+                        .decode(self.tag.get().ok_or_else(|| {
                             CryptoTensorsError::KeyUnwrap("tag is empty".to_string())
                         })?)
                         .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
@@ -487,6 +581,114 @@ impl<'data> SingleCryptor<'data> {
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set buffer".to_string()))?;
         Ok(())
     }
+
+    /// Create a new SingleCryptor with a new master key.
+    ///
+    /// If the DEK is already wrapped (wrapped_key is set), it will be
+    /// decrypted with the old master key and re-encrypted with the new one.
+    /// If the DEK is not yet wrapped (lazy encryption), only the master_key
+    /// will be updated without re-wrapping.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_key` - The new key material containing the new master key
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(SingleCryptor)` - A new SingleCryptor with the new master key
+    /// * `Err(CryptoTensorsError)` - If rewrap fails or algorithm mismatch
+    ///
+    /// # Errors
+    ///
+    /// * `InvalidAlgorithm` - If the new key's algorithm doesn't match the current algorithm
+    /// * `MissingMasterKey` - If current master key is not set (only when re-wrapping)
+    /// * `KeyUnwrap` - If DEK decryption fails (only when re-wrapping)
+    /// * `Encryption` - If DEK re-encryption fails (only when re-wrapping)
+    pub fn with_new_key(&self, new_key: &KeyMaterial) -> Result<Self, CryptoTensorsError> {
+        // Check algorithm consistency
+        if !new_key.alg.is_empty() && new_key.alg != self.enc_algo {
+            return Err(CryptoTensorsError::InvalidAlgorithm(format!(
+                "Algorithm mismatch: current={}, new={}",
+                self.enc_algo, new_key.alg
+            )));
+        }
+
+        // Get new master key
+        let new_master_key = new_key.get_master_key_bytes()?;
+        let new_master_key = Arc::from(new_master_key);
+
+        // Check if wrapped_key exists (needs re-wrapping)
+        let (new_wrapped_key, new_key_iv, new_key_tag) = if self.wrapped_key.get().is_some() {
+            // Case 1: wrapped_key exists, need to re-wrap
+            // 1.1 Validate current master key exists
+            if self.master_key.is_empty() {
+                return Err(CryptoTensorsError::MissingMasterKey);
+            }
+
+            // 1.2 Unwrap DEK with current master key
+            let mut dek = self.unwrap_key()?;
+
+            // 1.3 Re-wrap DEK with new master key
+            let (key_iv, key_tag) = encrypt_data(&mut dek, &new_master_key, &self.enc_algo)?;
+
+            // Return new encrypted values
+            (
+                Some(BASE64.encode(&dek)),
+                Some(BASE64.encode(&key_iv)),
+                Some(BASE64.encode(&key_tag)),
+            )
+        } else {
+            // Case 2: wrapped_key doesn't exist (lazy encryption), no need to re-wrap
+            (None, None, None)
+        };
+
+        // Create new SingleCryptor
+        let new_cryptor = Self {
+            enc_algo: self.enc_algo.clone(),
+            wrapped_key: OnceCell::new(),
+            key_iv: OnceCell::new(),
+            key_tag: OnceCell::new(),
+            iv: self.iv.clone(),     // Preserve data encryption IV (if set)
+            tag: self.tag.clone(),   // Preserve data encryption tag (if set)
+            buffer: OnceCell::new(), // Clear buffer (master_key changed)
+            master_key: new_master_key,
+            _phantom: std::marker::PhantomData,
+        };
+
+        // If re-wrapped, set new encrypted fields
+        if let (Some(wk), Some(kiv), Some(ktag)) = (new_wrapped_key, new_key_iv, new_key_tag) {
+            new_cryptor.wrapped_key.set(wk).map_err(|_| {
+                CryptoTensorsError::Encryption("Failed to set wrapped key".to_string())
+            })?;
+            new_cryptor
+                .key_iv
+                .set(kiv)
+                .map_err(|_| CryptoTensorsError::Encryption("Failed to set key iv".to_string()))?;
+            new_cryptor
+                .key_tag
+                .set(ktag)
+                .map_err(|_| CryptoTensorsError::Encryption("Failed to set key tag".to_string()))?;
+        }
+        // If no re-wrap needed, wrapped_key/key_iv/key_tag remain unset (lazy encryption)
+
+        Ok(new_cryptor)
+    }
+}
+
+impl<'data> Clone for SingleCryptor<'data> {
+    fn clone(&self) -> Self {
+        Self {
+            enc_algo: self.enc_algo.clone(),
+            wrapped_key: self.wrapped_key.clone(),
+            key_iv: self.key_iv.clone(),
+            key_tag: self.key_tag.clone(),
+            iv: self.iv.clone(),
+            tag: self.tag.clone(),
+            buffer: self.buffer.clone(),
+            master_key: self.master_key.clone(),
+            _phantom: self._phantom,
+        }
+    }
 }
 
 /// Information about header signature and methods for signing/verifying
@@ -514,8 +716,10 @@ impl HeaderSigner {
     /// * `Ok(Self)` - If the key material contains valid signing keys
     /// * `Err(CryptoTensorsError)` - If the key material is invalid or missing required keys
     fn new(key_material: &KeyMaterial) -> Result<Self, CryptoTensorsError> {
-        let alg = SignatureAlgorithm::from_str(&key_material.alg)
-            .ok_or_else(|| CryptoTensorsError::InvalidAlgorithm(key_material.alg.clone()))?;
+        let alg = key_material
+            .alg
+            .parse::<SignatureAlgorithm>()
+            .map_err(|_| CryptoTensorsError::InvalidAlgorithm(key_material.alg.clone()))?;
 
         let priv_key = key_material
             .d_priv
@@ -598,6 +802,21 @@ impl<'data> CryptoTensors<'data> {
         self.cryptors.get(tensor_name)
     }
 
+    /// Get the encryption key
+    pub fn enc_key(&self) -> &KeyMaterial {
+        &self.enc_key
+    }
+
+    /// Get the signing key
+    pub fn sign_key(&self) -> &KeyMaterial {
+        &self.sign_key
+    }
+
+    /// Get the policy
+    pub fn policy(&self) -> &AccessPolicy {
+        &self.policy
+    }
+
     /// Create a new encryptor mapping from encryption configuration
     ///
     /// # Arguments
@@ -614,17 +833,14 @@ impl<'data> CryptoTensors<'data> {
         tensors: Vec<String>,
         config: &SerializeCryptoConfig,
     ) -> Result<Option<Self>, CryptoTensorsError> {
-        // Check version
-        if config.version != "1" {
-            return Err(CryptoTensorsError::UnsupportedVersion(
-                config.version.clone(),
-            ));
-        }
-        config.enc_key.validate(ValidateMode::ForCreation)?;
-        config.sign_key.validate(ValidateMode::ForCreation)?;
+        let enc_key = Self::resolve_key_from_serialize_config(config, SerializeKeyKind::Enc)?;
+        let sign_key = Self::resolve_key_from_serialize_config(config, SerializeKeyKind::Sign)?;
+
+        enc_key.validate(ValidateMode::ForCreation)?;
+        sign_key.validate(ValidateMode::ForCreation)?;
 
         // Determine which tensors need to be encrypted
-        let matched_tensors = match &config.tensors {
+        let matched_tensors = match &config.tensor_filter {
             None => tensors,
             Some(names) => names
                 .iter()
@@ -642,21 +858,21 @@ impl<'data> CryptoTensors<'data> {
         let cryptors = matched_tensors
             .iter()
             .map(|name| {
-                let cryptor = SingleCryptor::new(&config.enc_key)?;
+                let cryptor = SingleCryptor::new(&enc_key)?;
                 Ok((name.clone(), cryptor))
             })
             .collect::<Result<HashMap<String, SingleCryptor<'data>>, CryptoTensorsError>>()?;
 
         // Create signer
-        let signer = HeaderSigner::new(&config.sign_key)?;
+        let signer = HeaderSigner::new(&sign_key)?;
 
         Ok(Some(Self {
             cryptors,
-            enc_key: config.enc_key.clone(),
-            sign_key: config.sign_key.clone(),
+            enc_key,
+            sign_key,
             signer,
-            policy: config.policy.clone(),
-            version: config.version.clone(),
+            policy: config.policy.clone().unwrap_or_default(),
+            version: CRYPTOTENSORS_VERSION.to_string(),
         }))
     }
 
@@ -730,6 +946,110 @@ impl<'data> CryptoTensors<'data> {
         Ok(Some(new_metadata))
     }
 
+    /// enc_key/sign_key are independent: registry allowed for a key iff that key is not directly provided.
+    fn params_for_serialize<'a>(
+        config: &'a SerializeCryptoConfig,
+        kind: SerializeKeyKind,
+    ) -> KeyLookupParams<'a> {
+        let (direct, jku, kid, registry_allowed) = match kind {
+            SerializeKeyKind::Enc => (
+                config.enc_key.as_ref(),
+                config.enc_jku.as_deref(),
+                config.enc_kid.as_deref(),
+                config.enc_key.is_none(),
+            ),
+            SerializeKeyKind::Sign => (
+                config.sign_key.as_ref(),
+                config.sign_jku.as_deref(),
+                config.sign_kid.as_deref(),
+                config.sign_key.is_none(),
+            ),
+        };
+        KeyLookupParams {
+            direct,
+            jku,
+            kid,
+            registry_allowed,
+        }
+    }
+
+    /// enc_key/sign_key are independent: registry allowed for a key iff that key is not directly provided.
+    fn params_for_deserialize<'a>(
+        key: &'a KeyMaterial,
+        config: Option<&'a DeserializeCryptoConfig>,
+        kind: DeserializeKeyKind,
+    ) -> KeyLookupParams<'a> {
+        let (direct, registry_allowed) = match config {
+            None => (None, true),
+            Some(c) => {
+                let direct = match kind {
+                    DeserializeKeyKind::Enc => c.enc_key.as_ref(),
+                    DeserializeKeyKind::Sign => c.sign_key.as_ref(),
+                };
+                let registry_allowed = match kind {
+                    DeserializeKeyKind::Enc => c.enc_key.is_none(),
+                    DeserializeKeyKind::Sign => c.sign_key.is_none(),
+                };
+                (direct, registry_allowed)
+            }
+        };
+        KeyLookupParams {
+            direct,
+            jku: key.jku.as_deref(),
+            kid: key.kid.as_deref(),
+            registry_allowed,
+        }
+    }
+
+    fn resolve_key_from_deserialize_config(
+        key: &mut KeyMaterial,
+        config: Option<&DeserializeCryptoConfig>,
+        kind: DeserializeKeyKind,
+    ) -> Result<(), CryptoTensorsError> {
+        let params = Self::params_for_deserialize(key, config, kind);
+        let role = match kind {
+            DeserializeKeyKind::Enc => KeyRole::Master,
+            DeserializeKeyKind::Sign => KeyRole::Verify,
+        };
+        let resolved = resolve_key(role, &params, false)?;
+        if params.direct.is_some() {
+            *key = resolved;
+        } else {
+            key.update_from_key(&resolved)?;
+            if !resolved.alg.is_empty() {
+                key.alg = resolved.alg.clone();
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_key_from_serialize_config(
+        config: &SerializeCryptoConfig,
+        kind: SerializeKeyKind,
+    ) -> Result<KeyMaterial, CryptoTensorsError> {
+        let params = Self::params_for_serialize(config, kind);
+        let role = match kind {
+            SerializeKeyKind::Enc => KeyRole::Master,
+            SerializeKeyKind::Sign => KeyRole::Signing,
+        };
+        let mut out = resolve_key(role, &params, true)?;
+        // Only overlay kid/jku when key came from registry (not direct).
+        // Direct keys ignore config's kid/jku and use the key's own kid/jku.
+        if params.direct.is_none() {
+            let (kid, jku) = match kind {
+                SerializeKeyKind::Enc => (config.enc_kid.clone(), config.enc_jku.clone()),
+                SerializeKeyKind::Sign => (config.sign_kid.clone(), config.sign_jku.clone()),
+            };
+            if kid.is_some() {
+                out.kid = kid;
+            }
+            if jku.is_some() {
+                out.jku = jku;
+            }
+        }
+        Ok(out)
+    }
+
     /// Create a new encryptor mapping from metadata
     ///
     /// # Arguments
@@ -741,6 +1061,24 @@ impl<'data> CryptoTensors<'data> {
     /// * `Ok(CryptoTensors)` - If valid encryption metadata was found and verified
     /// * `Err(CryptoTensorsError)` - If verification fails or metadata is invalid
     pub fn from_header(header: &Metadata) -> Result<Option<Self>, CryptoTensorsError> {
+        Self::from_header_with_config(header, None)
+    }
+
+    /// Create a new encryptor mapping from metadata with optional config
+    ///
+    /// # Arguments
+    ///
+    /// * `header` - The Metadata object containing the header
+    /// * `config` - Optional deserialization configuration
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(CryptoTensors)` - If valid encryption metadata was found and verified
+    /// * `Err(CryptoTensorsError)` - If verification fails or metadata is invalid
+    pub fn from_header_with_config(
+        header: &Metadata,
+        config: Option<&DeserializeCryptoConfig>,
+    ) -> Result<Option<Self>, CryptoTensorsError> {
         // return None if the header does not contain metadata or metadata does not contain encryption info
         let metadata = match header.metadata().as_ref() {
             Some(m) => m,
@@ -771,14 +1109,15 @@ impl<'data> CryptoTensors<'data> {
             .get("version")
             .and_then(|v| v.as_str())
             .ok_or(CryptoTensorsError::MissingVersion)?;
-        if version != "1" {
+        if version != CRYPTOTENSORS_VERSION {
             return Err(CryptoTensorsError::UnsupportedVersion(version.to_string()));
         }
-        let enc_key = KeyMaterial::from_header(&key_materials["enc"])?;
-        let sign_key = KeyMaterial::from_header(&key_materials["sign"])?;
+        let mut enc_key = KeyMaterial::from_header(&key_materials["enc"])?;
+        let mut sign_key = KeyMaterial::from_header(&key_materials["sign"])?;
 
-        // Load keys
-        sign_key.load_key()?;
+        // Load keys from config or registry
+        Self::resolve_key_from_deserialize_config(&mut enc_key, config, DeserializeKeyKind::Enc)?;
+        Self::resolve_key_from_deserialize_config(&mut sign_key, config, DeserializeKeyKind::Sign)?;
 
         // Create signer and verify signature
         let signer = HeaderSigner::new(&sign_key)?;
@@ -827,7 +1166,21 @@ impl<'data> CryptoTensors<'data> {
         }
 
         // Initialize cryptors after verification
-        enc_key.load_key()?;
+        // Key should already be loaded by resolve_key_from_deserialize_config; fallback via resolve_key when allowed
+        if enc_key.k.get().and_then(|v| v.as_ref()).is_none() {
+            let params = Self::params_for_deserialize(&enc_key, config, DeserializeKeyKind::Enc);
+            if params.registry_allowed {
+                let resolved = resolve_key(KeyRole::Master, &params, false)?;
+                enc_key.update_from_key(&resolved)?;
+                if !resolved.alg.is_empty() {
+                    enc_key.alg = resolved.alg.clone();
+                }
+            } else {
+                return Err(CryptoTensorsError::KeyLoad(
+                    "encryption key material missing: provide enc_key or provider when not using registry".to_string(),
+                ));
+            }
+        }
         let master_key: Arc<[u8]> = Arc::from(enc_key.get_master_key_bytes()?);
 
         let mut cryptors: HashMap<String, SingleCryptor<'data>> =
@@ -913,5 +1266,62 @@ impl<'data> CryptoTensors<'data> {
             Some(cryptor) => cryptor.buffer.get().map(|buf| buf.as_slice()),
             None => None,
         }
+    }
+
+    /// Rewrap (re-encrypt) the DEKs with new keys
+    ///
+    /// This method decrypts each tensor's DEK with the old key and re-encrypts it with the new key.
+    /// It's useful for key rotation or transferring encrypted data between users.
+    ///
+    /// # Arguments
+    ///
+    /// * `old_config` - Configuration for decryption (None = use already loaded keys)
+    /// * `new_config` - Configuration for encryption with new keys
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If rewrap succeeds
+    /// * `Err(CryptoTensorsError)` - If rewrap fails
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use cryptotensors::{CryptoTensors, DeserializeCryptoConfig, SerializeCryptoConfig};
+    ///
+    /// // Assuming cryptotensors is already loaded
+    /// let new_config = SerializeCryptoConfig::with_kids("new-enc", "new-sign");
+    /// // cryptotensors.rewrap(None, &new_config)?;
+    /// ```
+    pub fn rewrap(&mut self, new_config: &SerializeCryptoConfig) -> Result<(), CryptoTensorsError> {
+        // 1. Resolve new encryption and signing keys
+        let new_enc_key =
+            Self::resolve_key_from_serialize_config(new_config, SerializeKeyKind::Enc)?;
+        let new_sign_key =
+            Self::resolve_key_from_serialize_config(new_config, SerializeKeyKind::Sign)?;
+
+        new_enc_key.validate(ValidateMode::ForCreation)?;
+        new_sign_key.validate(ValidateMode::ForCreation)?;
+
+        // 3. Rewrap each cryptor's DEK using with_new_key
+        let cryptor_names: Vec<String> = self.cryptors.keys().cloned().collect();
+        for name in cryptor_names {
+            let old_cryptor = self.cryptors.get(&name).ok_or_else(|| {
+                CryptoTensorsError::KeyUnwrap(format!("Cryptor {} not found", name))
+            })?;
+            let new_cryptor = old_cryptor.with_new_key(&new_enc_key)?;
+            self.cryptors.insert(name, new_cryptor);
+        }
+
+        // 4. Update keys and signer
+        self.enc_key = new_enc_key;
+        self.sign_key = new_sign_key;
+        self.signer = HeaderSigner::new(&self.sign_key)?;
+
+        // 5. Update policy if provided
+        if let Some(policy) = &new_config.policy {
+            self.policy = policy.clone();
+        }
+
+        Ok(())
     }
 }

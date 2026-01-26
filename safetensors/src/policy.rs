@@ -20,6 +20,16 @@ pub struct AccessPolicy {
     remote_policy: String,
 }
 
+impl Default for AccessPolicy {
+    fn default() -> Self {
+        let default_policy = "package model\nallow = true".to_string();
+        Self {
+            local_policy: default_policy.clone(),
+            remote_policy: default_policy,
+        }
+    }
+}
+
 impl AccessPolicy {
     /// Create a new AccessPolicy
     pub fn new(local: Option<String>, remote: Option<String>) -> Self {

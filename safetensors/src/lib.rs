@@ -1,6 +1,13 @@
 // MODIFICATION: This file has been modified from the original safetensors project.
 // Added module exports for CryptoTensors encryption functionality.
 // See NOTICE file for details.
+//
+// TODO(no_std): CryptoTensors encryption modules currently require std due to:
+// - registry.rs: std::sync::RwLock, std::fs::File, libloading for dynamic providers
+// - policy.rs: regorus (Rego engine) may require std
+// - Various modules use std::collections::HashMap, std::sync::Arc
+// Future work: Extract pure crypto functions (encrypt/decrypt/sign/verify) to support no_std,
+// requiring users to pass keys directly instead of using the registry system.
 
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
@@ -22,19 +29,21 @@ pub mod registry;
 /// Signing/verification functions (Ed25519)
 pub mod signing;
 
-/// serialize_to_file only valid in std
+/// serialize_to_file and rewrap functions only valid in std
 #[cfg(feature = "std")]
-pub use tensor::serialize_to_file;
-pub use tensor::{serialize, Dtype, SafeTensorError, SafeTensors, View};
+pub use tensor::{rewrap, rewrap_file, rewrap_header, serialize_to_file};
+pub use tensor::{serialize, Dtype, Metadata, SafeTensorError, SafeTensors, View};
 
 // CryptoTensors: Re-export key types
-pub use cryptotensors::{CryptoTensors, CryptoTensorsError, SerializeCryptoConfig};
+pub use cryptotensors::{
+    CryptoTensors, CryptoTensorsError, DeserializeCryptoConfig, SerializeCryptoConfig,
+};
 pub use key::KeyMaterial;
 pub use policy::AccessPolicy;
 pub use registry::{
-    disable_provider, enable_provider, load_provider_native, register_provider,
-    register_provider_with_priority, KeyProvider, TempKeyProvider, PRIORITY_ENV, PRIORITY_FILE,
-    PRIORITY_NATIVE, PRIORITY_TEMP,
+    disable_provider, enable_provider, get_master_key, get_signing_key, get_verify_key,
+    load_provider_native, register_provider, register_provider_with_priority, DirectKeyProvider,
+    KeyProvider, PRIORITY_DIRECT, PRIORITY_ENV, PRIORITY_FILE, PRIORITY_NATIVE, PRIORITY_TEMP,
 };
 
 #[cfg(feature = "provider-env")]

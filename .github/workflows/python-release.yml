@@ -47,6 +47,8 @@ jobs:
           # Fix for ring crate cross-compilation to ARM64
           CFLAGS_aarch64_unknown_linux_gnu: '-D__ARM_ARCH=8'
           CFLAGS_armv7_unknown_linux_gnueabihf: '-D__ARM_ARCH=7'
+          # Required for cross-compilation with abi3-py311
+          PYO3_CROSS_PYTHON_VERSION: '3.11'
         with:
           target: ${{ matrix.platform.target }}
           # Use Python 3.11+ interpreter for buffer protocol support in abi3
@@ -83,6 +85,8 @@ jobs:
           # Fix for ring crate cross-compilation to ARM64
           CFLAGS_aarch64_unknown_linux_musl: '-D__ARM_ARCH=8'
           CFLAGS_armv7_unknown_linux_musleabihf: '-D__ARM_ARCH=7'
+          # Required for cross-compilation with abi3-py311
+          PYO3_CROSS_PYTHON_VERSION: '3.11'
         with:
           target: ${{ matrix.platform.target }}
           # Use system Python (3.11+) for buffer protocol support in abi3

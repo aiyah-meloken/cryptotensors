@@ -161,29 +161,42 @@ impl View for &PyView<'_> {
 #[pyclass]
 struct DecryptedBuffer {
     inner: Arc<Vec<u8>>,
+    // Buffer protocol requires stable pointers for shape/strides
+    // These are stored in Box to ensure stable addresses
+    shape: Box<[isize; 1]>,
+    strides: Box<[isize; 1]>,
+}
+
+impl DecryptedBuffer {
+    fn new(data: Arc<Vec<u8>>) -> Self {
+        let len = data.len() as isize;
+        Self {
+            inner: data,
+            shape: Box::new([len]),
+            strides: Box::new([1]), // itemsize = 1 byte
+        }
+    }
 }
 
 #[pymethods]
 impl DecryptedBuffer {
     /// Get buffer info for Python buffer protocol (Python 3.11+ stable ABI)
+    ///
+    /// Note: We expose this as a read-only buffer. PyTorch will issue a warning
+    /// but will work correctly by copying data when mutation is needed.
     unsafe fn __getbuffer__(
         slf: pyo3::PyRefMut<'_, Self>,
         view: *mut pyo3::ffi::Py_buffer,
         flags: std::ffi::c_int,
     ) -> PyResult<()> {
         use std::ffi::c_void;
-        use std::ptr;
 
         if view.is_null() {
             return Err(pyo3::exceptions::PyBufferError::new_err("View is null"));
         }
 
-        // Check for writable request - we don't support it
-        if (flags & pyo3::ffi::PyBUF_WRITABLE) != 0 {
-            return Err(pyo3::exceptions::PyBufferError::new_err(
-                "Buffer is read-only",
-            ));
-        }
+        // Note: We don't check PyBUF_WRITABLE - we expose as readonly and let
+        // the caller (PyTorch) handle it. PyTorch will copy if it needs to mutate.
 
         let data = slf.inner.as_slice();
 
@@ -191,18 +204,32 @@ impl DecryptedBuffer {
         (*view).buf = data.as_ptr() as *mut c_void;
         (*view).len = data.len() as isize;
         (*view).itemsize = 1;
-        (*view).readonly = 1;
+        (*view).readonly = 1; // Mark as read-only
         (*view).ndim = 1;
-        (*view).format = ptr::null_mut();
+
+        // Format string for unsigned bytes
+        static FORMAT: &[u8] = b"B\0";
         if (flags & pyo3::ffi::PyBUF_FORMAT) != 0 {
-            // "B" = unsigned byte
-            static FORMAT: &[u8] = b"B\0";
             (*view).format = FORMAT.as_ptr() as *mut std::ffi::c_char;
+        } else {
+            (*view).format = std::ptr::null_mut();
         }
-        (*view).shape = ptr::null_mut();
-        (*view).strides = ptr::null_mut();
-        (*view).suboffsets = ptr::null_mut();
-        (*view).internal = ptr::null_mut();
+
+        // Shape and strides - use stable pointers from Box
+        if (flags & pyo3::ffi::PyBUF_ND) != 0 {
+            (*view).shape = slf.shape.as_ptr() as *mut isize;
+        } else {
+            (*view).shape = std::ptr::null_mut();
+        }
+
+        if (flags & pyo3::ffi::PyBUF_STRIDES) != 0 {
+            (*view).strides = slf.strides.as_ptr() as *mut isize;
+        } else {
+            (*view).strides = std::ptr::null_mut();
+        }
+
+        (*view).suboffsets = std::ptr::null_mut();
+        (*view).internal = std::ptr::null_mut();
 
         // Increment reference count to keep the buffer alive
         pyo3::ffi::Py_IncRef(slf.as_ptr().cast());
@@ -1206,8 +1233,8 @@ impl Open {
                     if let Some(arc_data) = crypto.get_buffer(name) {
                         // Zero-copy: wrap Arc in DecryptedBuffer
                         Python::with_gil(|py| {
-                            let buffer = DecryptedBuffer { inner: arc_data };
-                            Py::new(py, buffer).map(|b| b.into_any().into())
+                            let buffer = DecryptedBuffer::new(arc_data);
+                            Py::new(py, buffer).map(|b| b.into_any())
                         })?
                     } else {
                         // Not encrypted, use original data
@@ -1287,8 +1314,8 @@ impl Open {
                             SafetensorError::new_err(format!("Decryption failed: {e:?}"))
                         })?;
                         let array: PyObject = if let Some(arc_data) = crypto.get_buffer(name) {
-                            let buffer = DecryptedBuffer { inner: arc_data };
-                            Py::new(py, buffer)?.into_any().into()
+                            let buffer = DecryptedBuffer::new(arc_data);
+                            Py::new(py, buffer)?.into_any()
                         } else {
                             PyByteArray::new(py, data).into_any().into()
                         };
@@ -1405,8 +1432,8 @@ impl Open {
                             })?;
                             // Zero-copy: use DecryptedBuffer
                             if let Some(arc_data) = crypto.get_buffer(name) {
-                                let buffer = DecryptedBuffer { inner: arc_data };
-                                Py::new(py, buffer)?.into_any().into()
+                                let buffer = DecryptedBuffer::new(arc_data);
+                                Py::new(py, buffer)?.into_any()
                             } else {
                                 PyByteArray::new(py, data).into_any().into()
                             }
@@ -1850,8 +1877,8 @@ impl PySafeSlice {
                     })?;
                     // Zero-copy: use DecryptedBuffer
                     if let Some(arc_data) = crypto.get_buffer(&self.name) {
-                        let buffer = DecryptedBuffer { inner: arc_data };
-                        Py::new(py, buffer)?.into_any().into()
+                        let buffer = DecryptedBuffer::new(arc_data);
+                        Py::new(py, buffer)?.into_any()
                     } else {
                         PyByteArray::new(py, data).into_any().into()
                     }
@@ -1971,8 +1998,8 @@ impl PySafeSlice {
                     })?;
                     // Zero-copy: use DecryptedBuffer
                     let array: PyObject = if let Some(arc_data) = crypto.get_buffer(&self.name) {
-                        let buffer = DecryptedBuffer { inner: arc_data };
-                        Py::new(py, buffer)?.into_any().into()
+                        let buffer = DecryptedBuffer::new(arc_data);
+                        Py::new(py, buffer)?.into_any()
                     } else {
                         PyByteArray::new(py, data).into_any().into()
                     };

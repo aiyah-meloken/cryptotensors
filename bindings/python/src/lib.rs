@@ -216,17 +216,10 @@ impl DecryptedBuffer {
         }
 
         // Shape and strides - use stable pointers from Box
-        if (flags & pyo3::ffi::PyBUF_ND) != 0 {
-            (*view).shape = slf.shape.as_ptr() as *mut isize;
-        } else {
-            (*view).shape = std::ptr::null_mut();
-        }
-
-        if (flags & pyo3::ffi::PyBUF_STRIDES) != 0 {
-            (*view).strides = slf.strides.as_ptr() as *mut isize;
-        } else {
-            (*view).strides = std::ptr::null_mut();
-        }
+        // Always provide shape/strides since ndim=1. Consumers might verify these
+        // even if they didn't explicitly request PyBUF_ND/PyBUF_STRIDES.
+        (*view).shape = slf.shape.as_ptr() as *mut isize;
+        (*view).strides = slf.strides.as_ptr() as *mut isize;
 
         (*view).suboffsets = std::ptr::null_mut();
         (*view).internal = std::ptr::null_mut();

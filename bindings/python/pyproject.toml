@@ -31,7 +31,7 @@ Source = 'https://github.com/aiyah-meloken/cryptotensors'
 Documentation = 'https://aiyah-meloken.github.io/cryptotensors/'
 
 [project.optional-dependencies]
-numpy = ["numpy>=1.21.6"]
+numpy = ["numpy>=1.21.6,<2.0"]
 torch = [
     "packaging",
     "cryptotensors[numpy]",

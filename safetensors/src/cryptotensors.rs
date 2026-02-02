@@ -342,7 +342,7 @@ enum DeserializeKeyKind {
 
 /// Information about encrypted tensor data and methods for encryption/decryption
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SingleCryptor<'data> {
+pub struct SingleCryptor {
     /// Algorithm used for encryption
     #[serde(skip)]
     enc_algo: String,
@@ -367,12 +367,9 @@ pub struct SingleCryptor<'data> {
     /// Master key for key encryption/decryption
     #[serde(skip)]
     master_key: Arc<[u8]>,
-    /// Phantom data for lifetime tracking
-    #[serde(skip)]
-    _phantom: std::marker::PhantomData<&'data ()>,
 }
 
-impl<'data> SingleCryptor<'data> {
+impl SingleCryptor {
     /// Create a new SingleCryptor from key material
     ///
     /// # Arguments
@@ -399,7 +396,6 @@ impl<'data> SingleCryptor<'data> {
             tag: OnceCell::new(),
             buffer: OnceCell::new(),
             master_key: Arc::from(master_key),
-            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -518,7 +514,7 @@ impl<'data> SingleCryptor<'data> {
     ///
     /// * `KeyUnwrap` - If key unwrapping fails
     /// * `Decryption` - If data decryption fails
-    fn decrypt(&'data self, data: &[u8]) -> Result<&'data [u8], CryptoTensorsError> {
+    fn decrypt(&self, data: &[u8]) -> Result<&[u8], CryptoTensorsError> {
         self.buffer
             .get_or_try_init(|| {
                 let data_key = Zeroizing::new(self.unwrap_key()?);
@@ -652,7 +648,6 @@ impl<'data> SingleCryptor<'data> {
             tag: self.tag.clone(),   // Preserve data encryption tag (if set)
             buffer: OnceCell::new(), // Clear buffer (master_key changed)
             master_key: new_master_key,
-            _phantom: std::marker::PhantomData,
         };
 
         // If re-wrapped, set new encrypted fields
@@ -675,7 +670,7 @@ impl<'data> SingleCryptor<'data> {
     }
 }
 
-impl<'data> Clone for SingleCryptor<'data> {
+impl Clone for SingleCryptor {
     fn clone(&self) -> Self {
         Self {
             enc_algo: self.enc_algo.clone(),
@@ -686,7 +681,6 @@ impl<'data> Clone for SingleCryptor<'data> {
             tag: self.tag.clone(),
             buffer: self.buffer.clone(),
             master_key: self.master_key.clone(),
-            _phantom: self._phantom,
         }
     }
 }
@@ -781,9 +775,9 @@ impl HeaderSigner {
 
 /// Manager for handling encryption and decryption of multiple tensors
 #[derive(Debug)]
-pub struct CryptoTensors<'data> {
+pub struct CryptoTensors {
     /// Mapping from tensor names to their encryptors
-    cryptors: HashMap<String, SingleCryptor<'data>>,
+    cryptors: HashMap<String, SingleCryptor>,
     /// Signer for signing/verifying the file header
     signer: HeaderSigner,
     /// Key material for encryption/decryption
@@ -796,9 +790,9 @@ pub struct CryptoTensors<'data> {
     version: String,
 }
 
-impl<'data> CryptoTensors<'data> {
+impl CryptoTensors {
     /// Get the encryptor for a specific tensor
-    pub fn get(&self, tensor_name: &str) -> Option<&SingleCryptor<'data>> {
+    pub fn get(&self, tensor_name: &str) -> Option<&SingleCryptor> {
         self.cryptors.get(tensor_name)
     }
 
@@ -861,7 +855,7 @@ impl<'data> CryptoTensors<'data> {
                 let cryptor = SingleCryptor::new(&enc_key)?;
                 Ok((name.clone(), cryptor))
             })
-            .collect::<Result<HashMap<String, SingleCryptor<'data>>, CryptoTensorsError>>()?;
+            .collect::<Result<HashMap<String, SingleCryptor>, CryptoTensorsError>>()?;
 
         // Create signer
         let signer = HeaderSigner::new(&sign_key)?;
@@ -1183,9 +1177,8 @@ impl<'data> CryptoTensors<'data> {
         }
         let master_key: Arc<[u8]> = Arc::from(enc_key.get_master_key_bytes()?);
 
-        let mut cryptors: HashMap<String, SingleCryptor<'data>> =
-            serde_json::from_str(encryption_info)
-                .map_err(|e| CryptoTensorsError::Encryption(e.to_string()))?;
+        let mut cryptors: HashMap<String, SingleCryptor> = serde_json::from_str(encryption_info)
+            .map_err(|e| CryptoTensorsError::Encryption(e.to_string()))?;
         for cryptor in cryptors.values_mut() {
             cryptor.master_key = master_key.clone();
             cryptor.enc_algo = enc_key.alg.clone();
@@ -1214,11 +1207,11 @@ impl<'data> CryptoTensors<'data> {
     ///
     /// * `Ok(&[u8])` - The decrypted data, or the original data if no encryptor exists
     /// * `Err(CryptoTensorsError)` - If decryption fails
-    pub fn silent_decrypt(
-        &'data self,
+    pub fn silent_decrypt<'a>(
+        &'a self,
         tensor_name: &str,
-        data: &'data [u8],
-    ) -> Result<&'data [u8], CryptoTensorsError> {
+        data: &'a [u8],
+    ) -> Result<&'a [u8], CryptoTensorsError> {
         match self.get(tensor_name) {
             Some(cryptor) => cryptor.decrypt(data),
             None => Ok(data), // Return original data if no cryptor is found

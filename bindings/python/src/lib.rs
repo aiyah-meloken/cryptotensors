@@ -184,8 +184,9 @@ impl DecryptedBuffer {
     ///
     /// Note: We expose this as a read-only buffer. PyTorch will issue a warning
     /// but will work correctly by copying data when mutation is needed.
+    #[cfg(any(not(Py_LIMITED_API), Py_3_11))]
     unsafe fn __getbuffer__(
-        slf: pyo3::PyRefMut<'_, Self>,
+        slf: pyo3::PyRef<'_, Self>,
         view: *mut pyo3::ffi::Py_buffer,
         flags: std::ffi::c_int,
     ) -> PyResult<()> {
@@ -196,13 +197,14 @@ impl DecryptedBuffer {
         }
 
         // Note: We don't check PyBUF_WRITABLE - we expose as readonly and let
-        // the caller (PyTorch) handle it. PyTorch will copy if it needs to mutate.
+        // the caller (PyTorch/JAX) handle it. They will copy if they need to mutate.
 
-        let data = slf.inner.as_slice();
+        let data_ptr = slf.inner.as_ref().as_ptr();
+        let data_len = slf.inner.len();
 
         // Fill in the Py_buffer struct
-        (*view).buf = data.as_ptr() as *mut c_void;
-        (*view).len = data.len() as isize;
+        (*view).buf = data_ptr as *mut c_void;
+        (*view).len = data_len as isize;
         (*view).itemsize = 1;
         (*view).readonly = 1; // Mark as read-only
         (*view).ndim = 1;
@@ -224,20 +226,13 @@ impl DecryptedBuffer {
         (*view).suboffsets = std::ptr::null_mut();
         (*view).internal = std::ptr::null_mut();
 
-        // Increment reference count to keep the buffer alive
-        pyo3::ffi::Py_IncRef(slf.as_ptr().cast());
-        (*view).obj = slf.as_ptr().cast();
-
-        Ok(())
-    }
-
-    /// Release buffer - prevent memory leaks
-    unsafe fn __releasebuffer__(&self, view: *mut pyo3::ffi::Py_buffer) {
-        // Decrement reference count
-        if !view.is_null() && !(*view).obj.is_null() {
-            pyo3::ffi::Py_DecRef((*view).obj);
-            (*view).obj = std::ptr::null_mut();
+        // obj must be a new reference to the skeleton object
+        let ptr = slf.as_ptr();
+        unsafe {
+            pyo3::ffi::Py_IncRef(ptr);
+            (*view).obj = ptr;
         }
+        Ok(())
     }
 }
 
@@ -254,6 +249,7 @@ fn prepare(tensor_dict: HashMap<String, PyBound<PyDict>>) -> PyResult<HashMap<St
         // Make sure it's extractable first.
         let data: &[u8] = pydata.extract()?;
         let data_len = data.len();
+
         let data: PyBound<PyBytes> = pydata.extract()?;
         let pydtype = tensor_desc
             .get_item("dtype")?
@@ -947,7 +943,7 @@ struct Open {
     device: Device,
     storage: Arc<Storage>,
     raw_mmap: Option<Arc<Storage>>, // Storage for direct access to the data (needed for decryption)
-    crypto: Option<Arc<CryptoTensors<'static>>>,
+    crypto: Option<Arc<CryptoTensors>>,
 }
 
 impl Open {
@@ -1437,9 +1433,10 @@ impl Open {
                     let sys = PyModule::import(py, intern!(py, "sys"))?;
                     let byteorder: String = sys.getattr(intern!(py, "byteorder"))?.extract()?;
 
+                    let array_holder = array; // Keep DecryptedBuffer alive
                     let mut tensor = torch
                         .getattr(intern!(py, "asarray"))?
-                        .call((array,), Some(&kwargs))?
+                        .call((array_holder.bind(py),), Some(&kwargs))?
                         .getattr(intern!(py, "view"))?
                         .call((), Some(&view_kwargs))?;
 
@@ -1478,7 +1475,17 @@ impl Open {
                         }
                     }
 
+                    // CRITICAL: Attach DecryptedBuffer to tensor to extend its lifetime
+                    // PyTorch's asarray() doesn't increment buffer refcount, so we must
+                    // ensure the buffer stays alive as long as the tensor exists
                     tensor = tensor.getattr(intern!(py, "reshape"))?.call1((shape,))?;
+
+                    let is_decrypted_buffer =
+                        array_holder.bind(py).is_instance_of::<DecryptedBuffer>();
+                    if is_decrypted_buffer {
+                        // Store buffer as a hidden attribute on the tensor
+                        tensor.setattr(intern!(py, "_cryptotensors_buffer_ref"), &array_holder)?;
+                    }
                     Ok(tensor.into_pyobject(py)?.into())
                 })
             }
@@ -1671,7 +1678,7 @@ struct PySafeSlice {
     device: Device,
     storage: Arc<Storage>,
     raw_mmap: Option<Arc<Storage>>,
-    crypto: Option<Arc<CryptoTensors<'static>>>,
+    crypto: Option<Arc<CryptoTensors>>,
 }
 
 #[derive(FromPyObject)]

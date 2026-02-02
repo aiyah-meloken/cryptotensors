@@ -100,7 +100,7 @@ jobs:
           # ghcr.io/rust-cross/rust-musl-cross based on Debian, use apt-get
           before-script-linux: |
             if command -v apk >/dev/null; then
-              apk add python3-dev
+              apk add python3 python3-dev
             elif command -v apt-get >/dev/null; then
               apt-get update && apt-get install -y python3-dev
             fi

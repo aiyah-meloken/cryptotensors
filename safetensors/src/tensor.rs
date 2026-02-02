@@ -363,7 +363,7 @@ pub fn serialize<
         // Use encrypted data if available, otherwise use original data
         if let Some(ref c) = crypto {
             if let Some(encrypted_data) = c.get_buffer(name) {
-                buffer.extend(encrypted_data);
+                buffer.extend(encrypted_data.as_slice());
                 continue;
             }
         }
@@ -415,7 +415,7 @@ where
         // Use encrypted data if available, otherwise use original data
         if let Some(ref c) = crypto {
             if let Some(encrypted_data) = c.get_buffer(name) {
-                f.write_all(encrypted_data)?;
+                f.write_all(encrypted_data.as_slice())?;
                 continue;
             }
         }

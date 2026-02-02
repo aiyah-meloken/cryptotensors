@@ -361,9 +361,9 @@ pub struct SingleCryptor<'data> {
     /// Authentication tag for data encryption encoded in base64
     #[serde(with = "cryptor_serde")]
     tag: OnceCell<String>,
-    /// Buffer for decrypted data
+    /// Buffer for decrypted data (Arc for zero-copy sharing with Python)
     #[serde(skip)]
-    buffer: OnceCell<Vec<u8>>,
+    buffer: OnceCell<Arc<Vec<u8>>>,
     /// Master key for key encryption/decryption
     #[serde(skip)]
     master_key: Arc<[u8]>,
@@ -542,9 +542,9 @@ impl<'data> SingleCryptor<'data> {
                         .as_slice(),
                 )?;
 
-                Ok(buffer)
+                Ok(Arc::new(buffer))
             })
-            .map(|vec_ref| vec_ref.as_slice())
+            .map(|arc_ref| arc_ref.as_slice())
     }
 
     /// Encrypt data using the master key
@@ -577,7 +577,7 @@ impl<'data> SingleCryptor<'data> {
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set tag".to_string()))?;
         self.wrap_key(&data_key)?;
         self.buffer
-            .set(buffer)
+            .set(Arc::new(buffer))
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set buffer".to_string()))?;
         Ok(())
     }
@@ -1251,7 +1251,10 @@ impl<'data> CryptoTensors<'data> {
         }
     }
 
-    /// Get encrypted data for a specific tensor
+    /// Get decrypted buffer as Arc for zero-copy sharing
+    ///
+    /// Returns the cached decrypted data if available. Use `silent_decrypt` first
+    /// to populate the cache.
     ///
     /// # Arguments
     ///
@@ -1259,11 +1262,11 @@ impl<'data> CryptoTensors<'data> {
     ///
     /// # Returns
     ///
-    /// * `Some(&[u8])` - The encrypted data if available
-    /// * `None` - If no encrypted data is available
-    pub fn get_buffer(&self, tensor_name: &str) -> Option<&[u8]> {
+    /// * `Some(Arc<Vec<u8>>)` - The decrypted data Arc if available
+    /// * `None` - If no decrypted data is available
+    pub fn get_buffer(&self, tensor_name: &str) -> Option<Arc<Vec<u8>>> {
         match self.get(tensor_name) {
-            Some(cryptor) => cryptor.buffer.get().map(|buf| buf.as_slice()),
+            Some(cryptor) => cryptor.buffer.get().cloned(),
             None => None,
         }
     }

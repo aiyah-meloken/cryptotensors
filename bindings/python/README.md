@@ -2,6 +2,10 @@
 
 CryptoTensors is a secure tensor file format that extends [safetensors](https://github.com/huggingface/safetensors) with encryption, signing, and access control capabilities while maintaining full backward compatibility.
 
+## Requirements
+
+- **Python 3.11+** (required for zero-copy buffer protocol support)
+
 ## Installation
 
 ```bash

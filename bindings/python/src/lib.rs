@@ -228,10 +228,8 @@ impl DecryptedBuffer {
 
         // obj must be a new reference to the skeleton object
         let ptr = slf.as_ptr();
-        unsafe {
-            pyo3::ffi::Py_IncRef(ptr);
-            (*view).obj = ptr;
-        }
+        pyo3::ffi::Py_IncRef(ptr);
+        (*view).obj = ptr;
         Ok(())
     }
 }

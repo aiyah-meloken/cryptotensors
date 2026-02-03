@@ -161,10 +161,13 @@ impl View for &PyView<'_> {
 #[pyclass]
 #[cfg(feature = "modern")]
 struct DecryptedBuffer {
+    #[allow(dead_code)]
     data: Arc<Vec<u8>>,
     // Buffer protocol requires stable pointers for shape/strides
     // These are stored in Box to ensure stable addresses
+    #[allow(dead_code)]
     shape: Box<[isize; 1]>,
+    #[allow(dead_code)]
     strides: Box<[isize; 1]>,
 }
 

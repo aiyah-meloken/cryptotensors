@@ -60,7 +60,7 @@ jobs:
           CFLAGS_armv7_unknown_linux_gnueabihf: '-D__ARM_ARCH=7'
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path bindings/python/Cargo.toml --no-default-features --features modern
+          args: --release --out dist --manifest-path bindings/python/Cargo.toml --no-default-features --features modern -i python3.11
           sccache: 'true'
           manylinux: auto
       - name: Upload wheels
@@ -106,7 +106,7 @@ jobs:
           CFLAGS_armv7_unknown_linux_musleabihf: '-D__ARM_ARCH=7'
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path bindings/python/Cargo.toml --no-default-features --features modern -i python3.9 python3.10 python3.11 python3.12 python3.13
+          args: --release --out dist --manifest-path bindings/python/Cargo.toml --no-default-features --features modern -i python3.11 python3.12 python3.13
           sccache: 'true'
           manylinux: musllinux_1_2
       - name: Upload wheels
@@ -140,7 +140,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path bindings/python/Cargo.toml --no-default-features --features modern
+          args: --release --out dist --manifest-path bindings/python/Cargo.toml --no-default-features --features modern -i python3.11
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -172,7 +172,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path bindings/python/Cargo.toml --no-default-features --features modern
+          args: --release --out dist --manifest-path bindings/python/Cargo.toml --no-default-features --features modern -i python3.11
           sccache: 'true'
       - name: Upload wheels
         uses: actions/upload-artifact@v4

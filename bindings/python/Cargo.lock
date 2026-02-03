@@ -220,6 +220,7 @@ dependencies = [
  "cryptotensors",
  "memmap2",
  "pyo3",
+ "pyo3-build-config",
  "serde_json",
 ]
 

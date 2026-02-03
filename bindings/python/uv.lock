@@ -371,7 +371,7 @@ requires-dist = [
     { name = "setuptools-rust", marker = "extra == 'testingfree'", specifier = ">=1.5.2" },
     { name = "tensorflow", marker = "extra == 'pinned-tf'", specifier = "==2.18.0" },
     { name = "tensorflow", marker = "extra == 'tensorflow'", specifier = ">=2.11.0" },
-    { name = "torch", marker = "extra == 'torch'", specifier = ">=1.10" },
+    { name = "torch", marker = "extra == 'torch'", specifier = ">=2.3" },
 ]
 provides-extras = ["all", "dev", "jax", "mlx", "numpy", "paddlepaddle", "pinned-tf", "quality", "tensorflow", "testing", "testingfree", "torch"]
 

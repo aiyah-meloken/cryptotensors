@@ -37,7 +37,7 @@ numpy = [
 torch = [
     "packaging",
     "cryptotensors[numpy]",
-    "torch>=1.10",
+    "torch>=2.3",
 ]
 tensorflow = [
     "cryptotensors[numpy]",

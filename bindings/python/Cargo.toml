@@ -12,8 +12,13 @@ rust-version = "1.74"
 name = "safetensors_rust"
 crate-type = ["cdylib"]
 
+[features]
+default = ["legacy"]
+legacy = ["pyo3/abi3-py38"]
+modern = ["pyo3/abi3-py311"]
+
 [dependencies]
-pyo3 = { version = "0.25", features = ["abi3", "abi3-py38", "extension-module"] }
+pyo3 = { version = "0.25", features = ["abi3", "extension-module"] }
 memmap2 = "0.9"
 serde_json = "1.0"
 

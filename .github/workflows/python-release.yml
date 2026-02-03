@@ -40,18 +40,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: 3.x
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         env:
           # Fix for ring crate cross-compilation to ARM64
           CFLAGS_aarch64_unknown_linux_gnu: '-D__ARM_ARCH=8'
           CFLAGS_armv7_unknown_linux_gnueabihf: '-D__ARM_ARCH=7'
-          # Required for cross-compilation with abi3-py311
-          PYO3_CROSS_PYTHON_VERSION: '3.11'
         with:
           target: ${{ matrix.platform.target }}
-          # Use Python 3.11+ interpreter for buffer protocol support in abi3
           args: --release --out dist --manifest-path bindings/python/Cargo.toml
           sccache: 'true'
           manylinux: auto
@@ -78,20 +75,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: 3.x
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         env:
           # Fix for ring crate cross-compilation to ARM64
           CFLAGS_aarch64_unknown_linux_musl: '-D__ARM_ARCH=8'
           CFLAGS_armv7_unknown_linux_musleabihf: '-D__ARM_ARCH=7'
-          # Required for cross-compilation with abi3-py311
-          PYO3_CROSS_PYTHON_VERSION: '3.11'
         with:
           target: ${{ matrix.platform.target }}
-          # Use system Python (3.11+) for buffer protocol support in abi3
-          # For cross-compilation, PYO3_CROSS_PYTHON_VERSION handles the version check
-          args: --release --out dist --manifest-path bindings/python/Cargo.toml -i python3.11 python3.12 python3.13
+          args: --release --out dist --manifest-path bindings/python/Cargo.toml
           sccache: 'true'
           manylinux: musllinux_1_2
       - name: Upload wheels
@@ -113,7 +106,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: 3.x
           architecture: ${{ matrix.platform.target }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -140,7 +133,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: 3.x
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:

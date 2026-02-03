@@ -1,6 +1,6 @@
 [project]
 name = 'cryptotensors'
-requires-python = '>=3.11,<3.14'
+requires-python = '>=3.9,<3.14'
 description = 'CryptoTensors is an extension of safetensors that adds encryption, signing, and access control (Rego-based policy engine) while maintaining full backward compatibility with the safetensors format'
 authors = [
     {name = 'Aiyah Meloken', email = 'aiyah_meloken@protonmail.com'}
@@ -13,6 +13,10 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -37,7 +41,7 @@ numpy = [
 torch = [
     "packaging",
     "cryptotensors[numpy]",
-    "torch>=2.3",
+    "torch>=1.10",
 ]
 tensorflow = [
     "cryptotensors[numpy]",

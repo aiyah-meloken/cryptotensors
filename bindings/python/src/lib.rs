@@ -184,7 +184,7 @@ impl DecryptedBuffer {
     ///
     /// Note: We expose this as a read-only buffer. PyTorch will issue a warning
     /// but will work correctly by copying data when mutation is needed.
-    #[cfg(any(not(Py_LIMITED_API), Py_3_11))]
+    #[cfg(all(any(not(Py_LIMITED_API), Py_3_11), not(PyPy)))]
     unsafe fn __getbuffer__(
         slf: pyo3::PyRef<'_, Self>,
         view: *mut pyo3::ffi::Py_buffer,

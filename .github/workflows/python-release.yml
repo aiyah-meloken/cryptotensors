@@ -91,7 +91,7 @@ jobs:
           target: ${{ matrix.platform.target }}
           # Use system Python (3.11+) for buffer protocol support in abi3
           # For cross-compilation, PYO3_CROSS_PYTHON_VERSION handles the version check
-          args: --release --out dist --manifest-path bindings/python/Cargo.toml
+          args: --release --out dist --manifest-path bindings/python/Cargo.toml -i python3.11 python3.12 python3.13
           sccache: 'true'
           manylinux: musllinux_1_2
       - name: Upload wheels

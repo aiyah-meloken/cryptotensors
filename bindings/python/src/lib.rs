@@ -232,6 +232,20 @@ impl DecryptedBuffer {
         (*view).obj = ptr;
         Ok(())
     }
+
+    /// Release buffer info for Python buffer protocol (Python 3.11+ stable ABI)
+    ///
+    /// Currently no explicit cleanup is required, but this hook is provided
+    /// for completeness and potential future resource management.
+    #[cfg(any(not(Py_LIMITED_API), Py_3_11))]
+    unsafe fn __releasebuffer__(
+        _slf: pyo3::PyRef<'_, Self>,
+        _view: *mut pyo3::ffi::Py_buffer,
+    ) -> PyResult<()> {
+        // No-op: the underlying memory is managed elsewhere and CPython
+        // will handle releasing the Py_buffer and decreasing obj's refcount.
+        Ok(())
+    }
 }
 
 fn prepare(tensor_dict: HashMap<String, PyBound<PyDict>>) -> PyResult<HashMap<String, PyView>> {

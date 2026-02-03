@@ -52,8 +52,6 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           # Use Python 3.11+ interpreter for buffer protocol support in abi3
-          # For cross-compilation targets (aarch64/armv7/ppc64le/s390x), we rely on PYO3_CROSS_PYTHON_VERSION
-          # For x86_64, we can point to the python binary. For simplicity, we use python3 from PATH which should be correct in manylinux2014
           args: --release --out dist --manifest-path bindings/python/Cargo.toml
           sccache: 'true'
           manylinux: auto
@@ -96,15 +94,6 @@ jobs:
           args: --release --out dist --manifest-path bindings/python/Cargo.toml
           sccache: 'true'
           manylinux: musllinux_1_2
-          # Ensure Python 3.11+ is available
-          # ghcr.io/rust-cross/rust-musl-cross based on Debian, use apt-get
-          before-script-linux: |
-            if command -v apk >/dev/null; then
-              apk add python3 python3-dev
-            elif command -v apt-get >/dev/null; then
-              apt-get update && apt-get install -y python3.11-dev
-            fi
-            python3.11 --version || python3 --version
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:

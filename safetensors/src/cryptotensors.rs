@@ -6,6 +6,7 @@
 
 use crate::encryption::{decrypt_data, encrypt_data, EncryptionAlgorithm};
 use crate::key::{resolve_key, KeyLookupParams, KeyMaterial, KeyRole, ValidateMode};
+use crate::memory::MmapBuffer;
 use crate::policy::AccessPolicy;
 use crate::signing::{sign_data, verify_signature, SignatureAlgorithm};
 use crate::tensor::{Metadata, TensorInfo};
@@ -362,8 +363,9 @@ pub struct SingleCryptor {
     #[serde(with = "cryptor_serde")]
     tag: OnceCell<String>,
     /// Buffer for decrypted data (Arc for zero-copy sharing with Python)
+    /// Uses OS-managed memory (mmap) for page alignment and better DMA performance
     #[serde(skip)]
-    buffer: OnceCell<Arc<Vec<u8>>>,
+    buffer: OnceCell<Arc<MmapBuffer>>,
     /// Master key for key encryption/decryption
     #[serde(skip)]
     master_key: Arc<[u8]>,
@@ -519,9 +521,17 @@ impl SingleCryptor {
             .get_or_try_init(|| {
                 let data_key = Zeroizing::new(self.unwrap_key()?);
 
-                let mut buffer = data.to_vec();
+                // Allocate page-aligned buffer using OS mmap
+                let mut mmap_buf = MmapBuffer::allocate(data.len()).map_err(|e| {
+                    CryptoTensorsError::Decryption(format!("failed to allocate buffer: {}", e))
+                })?;
+
+                // Copy encrypted data to mmap buffer
+                mmap_buf.as_mut_slice().copy_from_slice(data);
+
+                // Decrypt in-place
                 decrypt_data(
-                    &mut buffer,
+                    mmap_buf.as_mut_slice(),
                     data_key.as_slice(),
                     &self.enc_algo,
                     BASE64
@@ -538,7 +548,7 @@ impl SingleCryptor {
                         .as_slice(),
                 )?;
 
-                Ok(Arc::new(buffer))
+                Ok(Arc::new(mmap_buf))
             })
             .map(|arc_ref| arc_ref.as_slice())
     }
@@ -562,9 +572,17 @@ impl SingleCryptor {
     fn encrypt(&self, data: &[u8]) -> Result<(), CryptoTensorsError> {
         // Generate random data encryption key
         let data_key = Zeroizing::new(self.random_key()?);
-        // Copy data to buffer, prepare in-place encryption
-        let mut buffer = data.to_vec();
-        let (iv, tag) = encrypt_data(&mut buffer, &data_key, &self.enc_algo)?;
+
+        // Allocate page-aligned buffer using OS mmap
+        let mut mmap_buf = MmapBuffer::allocate(data.len()).map_err(|e| {
+            CryptoTensorsError::Encryption(format!("failed to allocate buffer: {}", e))
+        })?;
+
+        // Copy data to mmap buffer
+        mmap_buf.as_mut_slice().copy_from_slice(data);
+
+        // Encrypt in-place
+        let (iv, tag) = encrypt_data(mmap_buf.as_mut_slice(), &data_key, &self.enc_algo)?;
         self.iv
             .set(BASE64.encode(&iv))
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set iv".to_string()))?;
@@ -573,7 +591,7 @@ impl SingleCryptor {
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set tag".to_string()))?;
         self.wrap_key(&data_key)?;
         self.buffer
-            .set(Arc::new(buffer))
+            .set(Arc::new(mmap_buf))
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set buffer".to_string()))?;
         Ok(())
     }
@@ -1255,9 +1273,9 @@ impl CryptoTensors {
     ///
     /// # Returns
     ///
-    /// * `Some(Arc<Vec<u8>>)` - The decrypted data Arc if available
+    /// * `Some(Arc<MmapBuffer>)` - The decrypted data Arc if available (page-aligned)
     /// * `None` - If no decrypted data is available
-    pub fn get_buffer(&self, tensor_name: &str) -> Option<Arc<Vec<u8>>> {
+    pub fn get_buffer(&self, tensor_name: &str) -> Option<Arc<MmapBuffer>> {
         match self.get(tensor_name) {
             Some(cryptor) => cryptor.buffer.get().cloned(),
             None => None,

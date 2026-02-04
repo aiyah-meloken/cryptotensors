@@ -39,6 +39,10 @@ regorus = "0.4"
 thiserror = "2.0"
 libloading = "0.8"
 
+# CryptoTensors: OS memory management
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 criterion = "0.6"
 memmap2 = "0.9"

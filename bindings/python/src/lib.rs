@@ -30,6 +30,7 @@ use std::sync::OnceLock;
 // MODIFIED: CryptoTensors imports for encryption/decryption support
 use cryptotensors::cryptotensors::{CryptoTensors, DeserializeCryptoConfig, SerializeCryptoConfig};
 use cryptotensors::key::KeyMaterial;
+use cryptotensors::memory::MmapBuffer;
 use cryptotensors::policy::AccessPolicy;
 use cryptotensors::registry::{self, load_provider_native, DirectKeyProvider, PRIORITY_DIRECT};
 
@@ -158,11 +159,12 @@ impl View for &PyView<'_> {
 ///
 /// This struct implements the Python buffer protocol to allow Python
 /// to directly access Rust memory without copying.
+/// Uses OS-managed memory (mmap) for optimal page alignment.
 #[pyclass]
 #[cfg(feature = "modern")]
 struct DecryptedBuffer {
     #[allow(dead_code)]
-    data: Arc<Vec<u8>>,
+    data: Arc<MmapBuffer>,
     // Buffer protocol requires stable pointers for shape/strides
     // These are stored in Box to ensure stable addresses
     #[allow(dead_code)]
@@ -173,7 +175,7 @@ struct DecryptedBuffer {
 
 #[cfg(feature = "modern")]
 impl DecryptedBuffer {
-    fn new(data: Arc<Vec<u8>>) -> Self {
+    fn new(data: Arc<MmapBuffer>) -> Self {
         let len = data.as_slice().len() as isize;
         Self {
             data,

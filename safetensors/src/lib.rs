@@ -22,6 +22,9 @@ pub mod cryptotensors;
 pub mod encryption;
 /// Key management (JWK format)
 pub mod key;
+/// OS-managed memory allocation (mmap/VirtualAlloc)
+#[cfg(feature = "std")]
+pub mod memory;
 /// Access policy engine for model loading validation (Rego)
 pub mod policy;
 /// Pluggable KeyProvider registry for external key sources

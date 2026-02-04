@@ -202,6 +202,7 @@ version = "0.2.0"
 dependencies = [
  "base64",
  "hashbrown",
+ "libc",
  "libloading",
  "once_cell",
  "rand 0.8.5",

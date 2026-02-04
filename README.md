@@ -154,16 +154,11 @@ The file format is the same as the safetensors format, with the following additi
 
 ### Notes & Benefits
 
-- Two stages of encryption: the entire header is encrypted using the master decryption key, and the tensor data is encrypted using the per-tensor encryption keys.
+- **Two-stage encryption**: The entire header is encrypted using the master decryption key, and the tensor data is encrypted using per-tensor encryption keys. Tensors are decrypted on-demand when accessed, maintaining the benefits of lazy loading while ensuring security. This allows loading large encrypted models without decrypting all tensors upfront, preserving memory efficiency and supporting distributed settings where only specific tensors are needed.
 
-  on-demand when accessed, maintaining the benefits of lazy loading while ensuring security.
-  This allows loading large encrypted models without decrypting all tensors upfront, preserving
-  memory efficiency and supporting distributed settings where only specific tensors are needed.
-
-- **Zero-copy**: Access encrypted data without copying using `mmap`.
-  - *Note: Zero-copy support is disabled on PyPy due to C-API constraints.*
-- **Python Support**: Supports 3.11, 3.12, and 3.13.
-  - *Note: Python 3.14 (preview) is not yet supported due to upstream dependency constraints.*
+- **Zero-copy & page-aligned buffers**: Encrypted data is accessed via `mmap`, and decrypted buffers use OS-managed memory (mmap/VirtualAlloc) with page alignment for optimal SIMD and GPU DMA performance.
+  - *Note: Zero-copy requires Python 3.11+ (stable ABI). Disabled on PyPy.*
+- **Python Support**: 3.8 - 3.13 (zero-copy on 3.11+).
 
 **Note: Unless otherwise specified, all other notes, features, and benefits of the cryptotensors format are the same as the [safetensors format](https://github.com/huggingface/safetensors#file-format).**
 

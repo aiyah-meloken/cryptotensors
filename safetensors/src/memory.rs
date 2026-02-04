@@ -183,6 +183,36 @@ impl MmapBuffer {
     }
 }
 
+impl std::ops::Deref for MmapBuffer {
+    type Target = [u8];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl std::ops::DerefMut for MmapBuffer {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut_slice()
+    }
+}
+
+impl AsRef<[u8]> for MmapBuffer {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl AsMut<[u8]> for MmapBuffer {
+    #[inline]
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.as_mut_slice()
+    }
+}
+
 impl Drop for MmapBuffer {
     fn drop(&mut self) {
         if self.ptr.is_null() || self.len == 0 {

@@ -30,6 +30,7 @@ use std::sync::OnceLock;
 // MODIFIED: CryptoTensors imports for encryption/decryption support
 use cryptotensors::cryptotensors::{CryptoTensors, DeserializeCryptoConfig, SerializeCryptoConfig};
 use cryptotensors::key::KeyMaterial;
+#[cfg(feature = "modern")]
 use cryptotensors::memory::MmapBuffer;
 use cryptotensors::policy::AccessPolicy;
 use cryptotensors::registry::{self, load_provider_native, DirectKeyProvider, PRIORITY_DIRECT};
@@ -1466,7 +1467,7 @@ impl Open {
                                 }
                                 #[cfg(not(feature = "modern"))]
                                 {
-                                    PyByteArray::new(py, &arc_data).into_any().into()
+                                    PyByteArray::new(py, arc_data.as_slice()).into_any().into()
                                 }
                             } else {
                                 PyByteArray::new(py, data).into_any().into()
@@ -1937,7 +1938,7 @@ impl PySafeSlice {
                         }
                         #[cfg(not(feature = "modern"))]
                         {
-                            PyByteArray::new(py, &arc_data).into_any().into()
+                            PyByteArray::new(py, arc_data.as_slice()).into_any().into()
                         }
                     } else {
                         PyByteArray::new(py, data).into_any().into()
@@ -2065,7 +2066,7 @@ impl PySafeSlice {
                         }
                         #[cfg(not(feature = "modern"))]
                         {
-                            PyByteArray::new(py, &arc_data).into_any().into()
+                            PyByteArray::new(py, arc_data.as_slice()).into_any().into()
                         }
                     } else {
                         PyByteArray::new(py, data).into_any().into()

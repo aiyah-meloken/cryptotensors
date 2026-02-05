@@ -7,8 +7,8 @@ parent_dir = Path(__file__).parent.parent
 if str(parent_dir) not in sys.path:
     sys.path.insert(0, str(parent_dir))
 
-import pytest
-from tests.crypto_utils import generate_test_keys, create_crypto_config
+import pytest  # noqa: E402
+from tests.crypto_utils import generate_test_keys, create_crypto_config  # noqa: E402
 
 
 @pytest.fixture
@@ -18,7 +18,6 @@ def crypto_config():
     Supports BENCH_CRYPTO_ALGO environment variable to choose algorithm.
     """
     # Import locally to avoid issues with test structure in some environments
-    from tests.crypto_utils import generate_test_keys, create_crypto_config
 
     algo = os.environ.get("BENCH_CRYPTO_ALGO", "aes256gcm")
     keys = generate_test_keys(algorithm=algo)

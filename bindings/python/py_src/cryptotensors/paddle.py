@@ -81,7 +81,9 @@ def save_file(
     serialize_file(_flatten(tensors), filename, metadata=metadata, config=config)
 
 
-def load(data: bytes, device: str = "cpu", config: Optional[Dict[str, Any]] = None) -> Dict[str, paddle.Tensor]:
+def load(
+    data: bytes, device: str = "cpu", config: Optional[Dict[str, Any]] = None
+) -> Dict[str, paddle.Tensor]:
     """
     Loads a safetensors file into paddle format from pure bytes.
 

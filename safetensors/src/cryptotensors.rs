@@ -345,11 +345,15 @@ enum DeserializeKeyKind {
     Sign,
 }
 
+fn default_enc_algo() -> String {
+    "aes256gcm".to_string()
+}
+
 /// Information about encrypted tensor data and methods for encryption/decryption
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SingleCryptor {
     /// Algorithm used for encryption
-    #[serde(rename = "data_alg")]
+    #[serde(rename = "data_alg", default = "default_enc_algo")]
     enc_algo: String,
     /// Encrypted tensor key
     #[serde(with = "cryptor_serde")]

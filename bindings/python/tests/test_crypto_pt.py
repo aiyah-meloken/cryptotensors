@@ -2,7 +2,6 @@ import os
 import tempfile
 import unittest
 import torch
-import numpy as np
 import cryptotensors
 from cryptotensors.torch import load_file, save_file, safe_open
 from crypto_utils import generate_test_keys, create_crypto_config

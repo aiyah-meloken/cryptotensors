@@ -1,7 +1,5 @@
 import os
 import tempfile
-import pytest
-import numpy as np
 import paddle
 from cryptotensors.paddle import load_file, save_file
 

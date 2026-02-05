@@ -108,7 +108,9 @@ def load(data: bytes, config: Optional[Dict[str, Any]] = None) -> Dict[str, Arra
     return _np2jnp(flat)
 
 
-def load_file(filename: Union[str, os.PathLike], config: Optional[Dict[str, Any]] = None) -> Dict[str, Array]:
+def load_file(
+    filename: Union[str, os.PathLike], config: Optional[Dict[str, Any]] = None
+) -> Dict[str, Array]:
     """
     Loads a safetensors file into flax format.
 
@@ -128,7 +130,6 @@ def load_file(filename: Union[str, os.PathLike], config: Optional[Dict[str, Any]
     loaded = load_file(file_path)
     ```
     """
-    result = {}
     with safe_open(filename, framework="flax") as f:
         return f.get_tensors()
 

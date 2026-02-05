@@ -1,7 +1,6 @@
 # MODIFIED: Added encryption/decryption support for CryptoTensors
 # This is a derivative work based on the safetensors project by Hugging Face Inc.
 import json
-import os
 from importlib.metadata import entry_points
 from ._safetensors_rust import (  # noqa: F401
     SafetensorError,

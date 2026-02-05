@@ -1,6 +1,5 @@
 import os
 import tempfile
-import pytest
 import numpy as np
 from cryptotensors.numpy import load_file, save_file
 

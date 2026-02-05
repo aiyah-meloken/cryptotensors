@@ -345,7 +345,9 @@ def load_file(
         return f.get_tensors()
 
 
-def load(data: bytes, config: Optional[Dict[str, Any]] = None) -> Dict[str, torch.Tensor]:
+def load(
+    data: bytes, config: Optional[Dict[str, Any]] = None
+) -> Dict[str, torch.Tensor]:
     """
     Loads a safetensors file into torch format from pure bytes.
 

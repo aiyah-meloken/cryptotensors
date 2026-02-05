@@ -121,7 +121,9 @@ def load(data: bytes, config: Optional[Dict[str, Any]] = None) -> Dict[str, np.n
     return _view2np(flat)
 
 
-def load_file(filename: Union[str, os.PathLike], config: Optional[Dict[str, Any]] = None) -> Dict[str, np.ndarray]:
+def load_file(
+    filename: Union[str, os.PathLike], config: Optional[Dict[str, Any]] = None
+) -> Dict[str, np.ndarray]:
     """
     Loads a safetensors file into numpy format.
 
@@ -141,7 +143,6 @@ def load_file(filename: Union[str, os.PathLike], config: Optional[Dict[str, Any]
     loaded = load_file(file_path)
     ```
     """
-    result = {}
     with safe_open(filename, framework="np", config=config) as f:
         return f.get_tensors()
 

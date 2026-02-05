@@ -107,7 +107,9 @@ def load(data: bytes, config: Optional[Dict[str, Any]] = None) -> Dict[str, tf.T
     return _np2tf(flat)
 
 
-def load_file(filename: Union[str, os.PathLike], config: Optional[Dict[str, Any]] = None) -> Dict[str, tf.Tensor]:
+def load_file(
+    filename: Union[str, os.PathLike], config: Optional[Dict[str, Any]] = None
+) -> Dict[str, tf.Tensor]:
     """
     Loads a safetensors file into tensorflow format.
 

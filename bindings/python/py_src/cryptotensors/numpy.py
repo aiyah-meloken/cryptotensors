@@ -94,7 +94,7 @@ def save_file(
     serialize_file(flattened, filename, metadata=metadata, config=config)
 
 
-def load(data: bytes) -> Dict[str, np.ndarray]:
+def load(data: bytes, config: Optional[Dict[str, Any]] = None) -> Dict[str, np.ndarray]:
     """
     Loads a safetensors file into numpy format from pure bytes.
 
@@ -117,11 +117,11 @@ def load(data: bytes) -> Dict[str, np.ndarray]:
     loaded = load(data)
     ```
     """
-    flat = deserialize(data)
+    flat = deserialize(data, config=config)
     return _view2np(flat)
 
 
-def load_file(filename: Union[str, os.PathLike]) -> Dict[str, np.ndarray]:
+def load_file(filename: Union[str, os.PathLike], config: Optional[Dict[str, Any]] = None) -> Dict[str, np.ndarray]:
     """
     Loads a safetensors file into numpy format.
 
@@ -142,10 +142,8 @@ def load_file(filename: Union[str, os.PathLike]) -> Dict[str, np.ndarray]:
     ```
     """
     result = {}
-    with safe_open(filename, framework="np") as f:
-        for k in f.offset_keys():
-            result[k] = f.get_tensor(k)
-    return result
+    with safe_open(filename, framework="np", config=config) as f:
+        return f.get_tensors()
 
 
 _TYPES = {

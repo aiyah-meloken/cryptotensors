@@ -81,7 +81,7 @@ def save_file(
     return numpy.save_file(np_tensors, filename, metadata=metadata, config=config)
 
 
-def load(data: bytes) -> Dict[str, Array]:
+def load(data: bytes, config: Optional[Dict[str, Any]] = None) -> Dict[str, Array]:
     """
     Loads a safetensors file into flax format from pure bytes.
 
@@ -104,11 +104,11 @@ def load(data: bytes) -> Dict[str, Array]:
     loaded = load(data)
     ```
     """
-    flat = numpy.load(data)
+    flat = numpy.load(data, config=config)
     return _np2jnp(flat)
 
 
-def load_file(filename: Union[str, os.PathLike]) -> Dict[str, Array]:
+def load_file(filename: Union[str, os.PathLike], config: Optional[Dict[str, Any]] = None) -> Dict[str, Array]:
     """
     Loads a safetensors file into flax format.
 
@@ -130,9 +130,7 @@ def load_file(filename: Union[str, os.PathLike]) -> Dict[str, Array]:
     """
     result = {}
     with safe_open(filename, framework="flax") as f:
-        for k in f.offset_keys():
-            result[k] = f.get_tensor(k)
-    return result
+        return f.get_tensors()
 
 
 def _np2jnp(numpy_dict: Dict[str, np.ndarray]) -> Dict[str, Array]:

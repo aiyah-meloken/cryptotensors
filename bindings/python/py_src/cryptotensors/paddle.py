@@ -81,7 +81,7 @@ def save_file(
     serialize_file(_flatten(tensors), filename, metadata=metadata, config=config)
 
 
-def load(data: bytes, device: str = "cpu") -> Dict[str, paddle.Tensor]:
+def load(data: bytes, device: str = "cpu", config: Optional[Dict[str, Any]] = None) -> Dict[str, paddle.Tensor]:
     """
     Loads a safetensors file into paddle format from pure bytes.
 
@@ -105,15 +105,17 @@ def load(data: bytes, device: str = "cpu") -> Dict[str, paddle.Tensor]:
     ```
     """
     if paddle.__version__ >= "3.2.0":
-        flat = deserialize(data)
+        flat = deserialize(data, config=config)
         return _view2paddle(flat, device)
     else:
-        flat = numpy.load(data)
+        flat = numpy.load(data, config=config)
         return _np2paddle(flat, device)
 
 
 def load_file(
-    filename: Union[str, os.PathLike], device="cpu"
+    filename: Union[str, os.PathLike],
+    device="cpu",
+    config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, paddle.Tensor]:
     """
     Loads a safetensors file into paddle format.
@@ -139,11 +141,10 @@ def load_file(
     """
     result = {}
     if paddle.__version__ >= "3.2.0":
-        with safe_open(filename, framework="paddle", device=device) as f:
-            for k in f.offset_keys():
-                result[k] = f.get_tensor(k)
+        with safe_open(filename, framework="paddle", device=device, config=config) as f:
+            return f.get_tensors()
     else:
-        flat = numpy.load_file(filename)
+        flat = numpy.load_file(filename, config=config)
         result = _np2paddle(flat, device)
     return result
 

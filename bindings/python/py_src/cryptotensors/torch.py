@@ -315,7 +315,9 @@ def save_file(
 
 
 def load_file(
-    filename: Union[str, os.PathLike], device: Union[str, int] = "cpu"
+    filename: Union[str, os.PathLike],
+    device: Union[str, int] = "cpu",
+    config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, torch.Tensor]:
     """
     Loads a safetensors file into torch format.
@@ -339,14 +341,11 @@ def load_file(
     loaded = load_file(file_path)
     ```
     """
-    result = {}
-    with safe_open(filename, framework="pt", device=device) as f:
-        for k in f.offset_keys():
-            result[k] = f.get_tensor(k)
-    return result
+    with safe_open(filename, framework="pt", device=device, config=config) as f:
+        return f.get_tensors()
 
 
-def load(data: bytes) -> Dict[str, torch.Tensor]:
+def load(data: bytes, config: Optional[Dict[str, Any]] = None) -> Dict[str, torch.Tensor]:
     """
     Loads a safetensors file into torch format from pure bytes.
 
@@ -369,7 +368,7 @@ def load(data: bytes) -> Dict[str, torch.Tensor]:
     loaded = load(data)
     ```
     """
-    flat = deserialize(data)
+    flat = deserialize(data, config=config)
     return _view2torch(flat)
 
 

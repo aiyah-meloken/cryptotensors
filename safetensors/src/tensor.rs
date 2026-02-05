@@ -242,8 +242,8 @@ fn prepare<'data, S, V, I>(
     crypto_config: Option<&SerializeCryptoConfig>,
 ) -> Result<PrepareResult<'data, V>, SafeTensorError>
 where
-    S: AsRef<str> + Ord + Display,
-    V: View,
+    S: AsRef<str> + Ord + Display + Send + Sync,
+    V: View + Sync,
     I: IntoIterator<Item = (S, V)>,
 {
     // Make sure we're sorting by descending dtype alignment
@@ -266,6 +266,11 @@ where
         None
     };
 
+    // Parallelly encrypt all tensors if crypto is enabled
+    if let Some(ref c) = crypto {
+        c.par_encrypt_all(&data)?;
+    }
+
     let mut tensors: Vec<V> = Vec::with_capacity(data.len());
     let mut hmetadata = Vec::with_capacity(data.len());
     let mut offset = 0;
@@ -273,9 +278,8 @@ where
     for (name, tensor) in data {
         let tensor_name = name.as_ref().to_string();
 
-        // Encrypt tensor data if crypto is configured for this tensor
+        // Get encrypted data size if crypto is configured for this tensor
         let n = if let Some(ref c) = crypto {
-            c.silent_encrypt(&tensor_name, tensor.data().as_ref())?;
             c.get_buffer(&tensor_name)
                 .map(|b| b.len())
                 .unwrap_or(tensor.data_len())
@@ -326,8 +330,8 @@ where
 /// * `data_info` - Optional metadata to include in the header
 /// * `crypto_config` - Optional encryption configuration for CryptoTensors
 pub fn serialize<
-    S: AsRef<str> + Ord + core::fmt::Display,
-    V: View,
+    S: AsRef<str> + Ord + core::fmt::Display + Send + Sync,
+    V: View + Sync,
     I: IntoIterator<Item = (S, V)>,
 >(
     data: I,
@@ -385,8 +389,8 @@ pub fn serialize_to_file<S, V, I>(
     crypto_config: Option<&SerializeCryptoConfig>,
 ) -> Result<(), SafeTensorError>
 where
-    S: AsRef<str> + Ord + Display,
-    V: View,
+    S: AsRef<str> + Ord + Display + Send + Sync,
+    V: View + Sync,
     I: IntoIterator<Item = (S, V)>,
 {
     let (
@@ -731,8 +735,13 @@ impl<'data> SafeTensors<'data> {
     /// The tensors returned are merely views and the data is not owned by this
     /// structure. If encryption is enabled, tensors are transparently decrypted.
     pub fn tensors(&'data self) -> Vec<(String, TensorView<'data>)> {
-        let mut tensors = Vec::with_capacity(self.metadata.index_map.len());
-        for (name, &index) in &self.metadata.index_map {
+        // Parallelly decrypt all tensors if encryption is present
+        if let Some(ref c) = self.crypto {
+            let _ = c.par_decrypt_all(self.data, &self.metadata);
+        }
+
+        let mut tensors = Vec::with_capacity(self.metadata.index_map().len());
+        for (name, &index) in self.metadata.index_map() {
             let info = &self.metadata.tensors[index];
             let raw_data = &self.data[info.data_offsets.0..info.data_offsets.1];
 
@@ -830,6 +839,11 @@ impl<'data> SafeTensors<'data> {
         self.metadata.tensors.is_empty()
     }
 
+    /// Access the internal CryptoTensors object if present
+    pub fn crypto(&self) -> Option<&CryptoTensors> {
+        self.crypto.as_ref()
+    }
+
     /// Return the non-reserved metadata fields (keys NOT starting with "__") in the header.
     /// This excludes reserved fields like "__encryption__", "__crypto_keys__", "__signature__", "__policy__", etc.
     pub fn metadata(&self) -> Option<HashMap<String, String>> {
@@ -858,6 +872,16 @@ impl<'data> SafeTensors<'data> {
                     .collect::<HashMap<_, _>>()
             })
             .and_then(|meta| if meta.is_empty() { None } else { Some(meta) })
+    }
+
+    /// Returns a reference to the internal metadata.
+    pub fn get_metadata_ref(&self) -> &Metadata {
+        &self.metadata
+    }
+
+    /// Returns a reference to the underlying data.
+    pub fn get_data(&self) -> &'data [u8] {
+        self.data
     }
 }
 
@@ -1033,6 +1057,14 @@ impl Metadata {
     /// Gives back the tensor metadata
     pub fn metadata(&self) -> &Option<HashMap<String, String>> {
         &self.metadata
+    }
+
+    pub(crate) fn index_map(&self) -> &HashMap<String, usize> {
+        &self.index_map
+    }
+
+    pub(crate) fn get_tensor(&self, index: usize) -> Option<&TensorInfo> {
+        self.tensors.get(index)
     }
 }
 
@@ -2263,5 +2295,83 @@ mod tests {
         assert_eq!(t.data(), data);
 
         disable_provider("DirectKeyProvider");
+    }
+
+    #[test]
+    fn test_eager_mode_and_key_deletion() {
+        use crate::cryptotensors::{DeserializeCryptoConfig, SerializeCryptoConfig};
+        use crate::key::KeyMaterial;
+        use crate::tensor::{serialize_to_file, Dtype, SafeTensors, TensorView};
+        use std::collections::HashMap;
+
+        // 1. Create a tensor and encrypt it
+        let enc_key =
+            KeyMaterial::new_enc_key(None, Some("aes256gcm".to_string()), None, None).unwrap();
+        let sign_key = KeyMaterial::new_sign_key(None, None, None, None, None).unwrap();
+
+        let config = SerializeCryptoConfig::with_keys(enc_key.clone(), sign_key.clone());
+
+        let data = vec![0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let bytes: Vec<u8> = data.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let tensor = TensorView {
+            dtype: Dtype::F32,
+            shape: vec![1, 6],
+            data: &bytes,
+        };
+
+        let tmp_dir = tempfile::Builder::new()
+            .prefix("safetensors_eager")
+            .tempdir()
+            .unwrap();
+        let file_path = tmp_dir.path().join("model.safetensors");
+
+        let mut data_map = HashMap::new();
+        data_map.insert("tensor1".to_string(), tensor);
+
+        serialize_to_file(data_map, None, &file_path, Some(&config)).unwrap();
+
+        // 2. Load (Always Eager Mode)
+        let mut load_config = DeserializeCryptoConfig::new();
+        load_config.enc_key = Some(enc_key.clone());
+        load_config.sign_key = Some(sign_key.clone());
+
+        let file_content = std::fs::read(&file_path).unwrap();
+        // Use deserialize_with_config if available, or check signature logic
+        let safetensors =
+            SafeTensors::deserialize_with_config(&file_content, Some(&load_config)).unwrap();
+
+        // 3. Verify data access (should work because DEKs are pre-unwrapped)
+        let tensor_view = safetensors.tensor("tensor1").unwrap();
+        // Access data to ensure it works
+        let _data = tensor_view.data();
+        assert_eq!(_data.len(), 24);
+
+        // 4. Verify Master Key Deletion
+        if let Some(crypto) = &safetensors.crypto {
+            // Metadata sanitized. Use accessor.
+            assert!(
+                crypto.enc_key().k.get().is_none(),
+                "Master key (k) should be cleared from CryptoTensors metadata"
+            );
+
+            // Try rewrap - should SUCCEED even if master key is deleted,
+            // because DEKs are already unwrapped in "Always Eager" mode.
+            // We need to provide a new config with keys for re-encryption.
+            let new_config = SerializeCryptoConfig::with_keys(enc_key.clone(), sign_key.clone());
+
+            // CryptoTensors implements Clone (derived I assume, checked earlier field by field cloneable).
+            let mut crypto_clone = crypto.clone();
+
+            match crypto_clone.rewrap(&new_config) {
+                Ok(_) => {
+                    // Success! This proves rewrap works without the old master key.
+                }
+                Err(e) => {
+                    panic!("Rewrap failed unexpectedly: {:?}", e);
+                }
+            }
+        } else {
+            panic!("Crypto should be present");
+        }
     }
 }

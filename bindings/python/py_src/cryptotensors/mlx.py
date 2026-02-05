@@ -80,7 +80,7 @@ def save_file(
     return numpy.save_file(np_tensors, filename, metadata=metadata, config=config)
 
 
-def load(data: bytes) -> Dict[str, mx.array]:
+def load(data: bytes, config: Optional[Dict[str, Any]] = None) -> Dict[str, mx.array]:
     """
     Loads a safetensors file into MLX format from pure bytes.
 
@@ -103,11 +103,11 @@ def load(data: bytes) -> Dict[str, mx.array]:
     loaded = load(data)
     ```
     """
-    flat = numpy.load(data)
+    flat = numpy.load(data, config=config)
     return _np2mx(flat)
 
 
-def load_file(filename: Union[str, os.PathLike]) -> Dict[str, mx.array]:
+def load_file(filename: Union[str, os.PathLike], config: Optional[Dict[str, Any]] = None) -> Dict[str, mx.array]:
     """
     Loads a safetensors file into MLX format.
 
@@ -128,10 +128,8 @@ def load_file(filename: Union[str, os.PathLike]) -> Dict[str, mx.array]:
     ```
     """
     result = {}
-    with safe_open(filename, framework="mlx") as f:
-        for k in f.offset_keys():
-            result[k] = f.get_tensor(k)
-    return result
+    with safe_open(filename, framework="mlx", config=config) as f:
+        return f.get_tensors()
 
 
 def _np2mx(numpy_dict: Dict[str, np.ndarray]) -> Dict[str, mx.array]:

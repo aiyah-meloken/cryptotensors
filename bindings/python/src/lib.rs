@@ -137,13 +137,13 @@ static PADDLE_MODULE: OnceLock<Py<PyModule>> = OnceLock::new();
 struct PyView<'a> {
     shape: Vec<usize>,
     dtype: Dtype,
-    data: PyBound<'a, PyBytes>,
+    data: &'a [u8],
     data_len: usize,
 }
 
 impl View for &PyView<'_> {
     fn data(&self) -> std::borrow::Cow<'_, [u8]> {
-        Cow::Borrowed(self.data.as_bytes())
+        Cow::Borrowed(self.data)
     }
     fn shape(&self) -> &[usize] {
         &self.shape
@@ -176,7 +176,7 @@ struct DecryptedBuffer {
 
 #[cfg(feature = "modern")]
 impl DecryptedBuffer {
-    fn new(data: Arc<MmapBuffer>) -> Self {
+    pub fn new(data: Arc<MmapBuffer>) -> Self {
         let len = data.as_slice().len() as isize;
         Self {
             data,
@@ -258,8 +258,19 @@ impl DecryptedBuffer {
     }
 }
 
-fn prepare(tensor_dict: HashMap<String, PyBound<PyDict>>) -> PyResult<HashMap<String, PyView>> {
+/// Result of prepare() to keep PyBytes alive
+struct PreparedTensors<'a> {
+    tensors: HashMap<String, PyView<'a>>,
+    #[allow(dead_code)]
+    _holders: Vec<PyBound<'a, PyBytes>>,
+}
+
+fn prepare<'a>(
+    tensor_dict: &'a HashMap<String, PyBound<'a, PyDict>>,
+) -> PyResult<PreparedTensors<'a>> {
     let mut tensors = HashMap::with_capacity(tensor_dict.len());
+    let mut holders = Vec::with_capacity(tensor_dict.len());
+
     for (tensor_name, tensor_desc) in tensor_dict {
         let mut shape: Vec<usize> = tensor_desc
             .get_item("shape")?
@@ -268,16 +279,19 @@ fn prepare(tensor_dict: HashMap<String, PyBound<PyDict>>) -> PyResult<HashMap<St
         let pydata: PyBound<PyAny> = tensor_desc
             .get_item("data")?
             .ok_or_else(|| SafetensorError::new_err(format!("Missing `data` in {tensor_desc}")))?;
-        // Make sure it's extractable first.
-        let data: &[u8] = pydata.extract()?;
-        let data_len = data.len();
 
-        let data: PyBound<PyBytes> = pydata.extract()?;
+        let data_obj: PyBound<PyBytes> = pydata.extract()?;
+        let data_bytes: &[u8] = data_obj.as_bytes();
+        // Safety: The data is kept alive by `_holders` which retains `data_obj`.
+        // We extend the lifetime to 'a to store it in PyView.
+        let data_bytes: &'a [u8] = unsafe { std::mem::transmute(data_bytes) };
+        let data_len = data_bytes.len();
+
         let pydtype = tensor_desc
             .get_item("dtype")?
             .ok_or_else(|| SafetensorError::new_err(format!("Missing `dtype` in {tensor_desc}")))?;
-        let dtype: String = pydtype.extract()?;
-        let dtype = match dtype.as_ref() {
+        let dtype_str: String = pydtype.extract()?;
+        let dtype = match dtype_str.as_ref() {
             "bool" => Dtype::BOOL,
             "int8" => Dtype::I8,
             "uint8" => Dtype::U8,
@@ -296,7 +310,7 @@ fn prepare(tensor_dict: HashMap<String, PyBound<PyDict>>) -> PyResult<HashMap<St
             "float8_e8m0fnu" => Dtype::F8_E8M0,
             "float4_e2m1fn_x2" => Dtype::F4,
             "complex64" => Dtype::C64,
-            dtype_str => {
+            _ => {
                 return Err(SafetensorError::new_err(format!(
                     "dtype {dtype_str} is not covered",
                 )));
@@ -311,12 +325,16 @@ fn prepare(tensor_dict: HashMap<String, PyBound<PyDict>>) -> PyResult<HashMap<St
         let tensor = PyView {
             shape,
             dtype,
-            data,
+            data: data_bytes,
             data_len,
         };
-        tensors.insert(tensor_name, tensor);
+        tensors.insert(tensor_name.clone(), tensor);
+        holders.push(data_obj);
     }
-    Ok(tensors)
+    Ok(PreparedTensors {
+        tensors,
+        _holders: holders,
+    })
 }
 
 /// Serializes raw data.
@@ -355,9 +373,14 @@ fn serialize<'b>(
     metadata: Option<HashMap<String, String>>,
     config: Option<PyBound<PyAny>>,
 ) -> PyResult<PyBound<'b, PyBytes>> {
-    let tensors = prepare(tensor_dict)?;
-    let config = prepare_crypto(config)?;
-    let out = cryptotensors::tensor::serialize(&tensors, metadata, config.as_ref())
+    let prepared = prepare(&tensor_dict)?;
+    let tensors: Vec<_> = prepared
+        .tensors
+        .iter()
+        .map(|(k, v)| (k.as_str(), v))
+        .collect();
+    let config = prepare_serialize_crypto(config)?;
+    let out = cryptotensors::tensor::serialize(tensors, metadata, config.as_ref())
         .map_err(|e| SafetensorError::new_err(format!("Error while serializing: {e}")))?;
     let pybytes = PyBytes::new(py, &out);
     Ok(pybytes)
@@ -389,11 +412,16 @@ fn serialize_file(
     metadata: Option<HashMap<String, String>>,
     config: Option<PyBound<PyAny>>,
 ) -> PyResult<()> {
-    let tensors = prepare(tensor_dict)?;
-    let config = prepare_crypto(config)?;
+    let prepared = prepare(&tensor_dict)?;
+    let tensors: Vec<_> = prepared
+        .tensors
+        .iter()
+        .map(|(k, v)| (k.as_str(), v))
+        .collect();
+    let config = prepare_serialize_crypto(config)?;
 
     cryptotensors::tensor::serialize_to_file(
-        &tensors,
+        tensors,
         metadata,
         filename.as_path(),
         config.as_ref(),
@@ -437,7 +465,7 @@ fn rewrap_file(
         None
     };
 
-    let new_ser_config = prepare_crypto(Some(new_config))?
+    let new_ser_config = prepare_serialize_crypto(Some(new_config))?
         .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
 
     // Call safetensors crate function
@@ -481,7 +509,7 @@ fn rewrap_header(
         None
     };
 
-    let new_ser_config = prepare_crypto(Some(new_config))?
+    let new_ser_config = prepare_serialize_crypto(Some(new_config))?
         .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
 
     // Call safetensors crate function
@@ -525,7 +553,7 @@ fn rewrap(
         None
     };
 
-    let new_ser_config = prepare_crypto(Some(new_config))?
+    let new_ser_config = prepare_serialize_crypto(Some(new_config))?
         .ok_or_else(|| SafetensorError::new_err("new_config is required"))?;
 
     // Call safetensors crate function
@@ -569,7 +597,9 @@ fn prepare_deserialize_crypto(
 }
 
 /// MODIFIED: Parse Python dict to SerializeCryptoConfig for encryption.
-fn prepare_crypto(config: Option<PyBound<PyAny>>) -> PyResult<Option<SerializeCryptoConfig>> {
+fn prepare_serialize_crypto(
+    config: Option<PyBound<PyAny>>,
+) -> PyResult<Option<SerializeCryptoConfig>> {
     let Some(config) = config else {
         return Ok(None);
     };
@@ -697,11 +727,22 @@ fn pykeymaterial_from_dict(key_type: &str, dict: &PyBound<PyDict>) -> PyResult<K
 ///         The deserialized content is like:
 ///             [("tensor_name", {"shape": [2, 3], "dtype": "F32", "data": b"\0\0.." }), (...)]
 #[pyfunction]
-#[pyo3(signature = (bytes))]
-fn deserialize(py: Python, bytes: &[u8]) -> PyResult<Vec<(String, HashMap<String, PyObject>)>> {
-    let safetensor = SafeTensors::deserialize(bytes)
+#[pyo3(signature = (bytes, config=None))]
+fn deserialize(
+    py: Python,
+    bytes: &[u8],
+    config: Option<PyBound<PyAny>>,
+) -> PyResult<Vec<(String, HashMap<String, PyObject>)>> {
+    let deser_config = if let Some(c) = config {
+        prepare_deserialize_crypto(&c)?
+    } else {
+        None
+    };
+
+    let safetensor = SafeTensors::deserialize_with_config(bytes, deser_config.as_ref())
         .map_err(|e| SafetensorError::new_err(format!("Error while deserializing: {e}")))?;
 
+    let crypto_obj = safetensor.crypto();
     let tensors = safetensor.tensors();
     let mut items = Vec::with_capacity(tensors.len());
 
@@ -709,7 +750,28 @@ fn deserialize(py: Python, bytes: &[u8]) -> PyResult<Vec<(String, HashMap<String
         let pyshape: PyObject = PyList::new(py, tensor.shape().iter())?.into();
         let pydtype: PyObject = tensor.dtype().to_string().into_pyobject(py)?.into();
 
-        let pydata: PyObject = PyByteArray::new(py, tensor.data()).into();
+        let pydata: PyObject = if let Some(ref c) = crypto_obj {
+            let found = None;
+            if let Some(cryptor) = c.get(&tensor_name) {
+                if let Some(arc_buf) = cryptor.buffer_arc() {
+                    #[cfg(feature = "modern")]
+                    {
+                        found = Some(DecryptedBuffer::new(arc_buf).into_pyobject(py)?.into());
+                    }
+                    #[cfg(not(feature = "modern"))]
+                    {
+                        let _ = arc_buf;
+                    }
+                }
+            }
+            if let Some(p) = found {
+                p
+            } else {
+                PyByteArray::new(py, tensor.data()).into()
+            }
+        } else {
+            PyByteArray::new(py, tensor.data()).into()
+        };
 
         let map = HashMap::from([
             ("shape".to_string(), pyshape),
@@ -1583,6 +1645,54 @@ impl Open {
             )))
         }
     }
+
+    /// Returns all tensors in the file as a dictionary.
+    ///
+    /// MODIFIED: Added decryption support.
+    ///
+    /// Returns:
+    ///     (`Dict[str, Tensor]`):
+    ///         A dictionary mapping tensor names to tensor objects.
+    /// Example:
+    /// ```python
+    /// from safetensors import safe_open
+    ///
+    /// with safe_open("model.safetensors", framework="pt", device=0) as f:
+    ///     tensors = f.get_tensors()
+    ///
+    /// ```
+    pub fn get_tensors(&self, py: Python) -> PyResult<PyObject> {
+        if let Some(ref crypto) = self.crypto {
+            // Get data slice from storage
+            let data = match self.storage.as_ref() {
+                Storage::Mmap(mmap) => &mmap[self.offset..],
+                _ => {
+                    if let Some(ref raw) = self.raw_mmap {
+                        if let Storage::Mmap(mmap) = raw.as_ref() {
+                            &mmap[self.offset..]
+                        } else {
+                            return Err(SafetensorError::new_err("raw_mmap is not Mmap"));
+                        }
+                    } else {
+                        return Err(SafetensorError::new_err(
+                            "mmap storage is needed for parallel decryption",
+                        ));
+                    }
+                }
+            };
+            crypto.par_decrypt_all(data, &self.metadata).map_err(|e| {
+                SafetensorError::new_err(format!("Parallel decryption failed: {e:?}"))
+            })?;
+        }
+
+        let keys = self.keys()?;
+        let dict = PyDict::new(py);
+        for key in keys {
+            let tensor = self.get_tensor(&key)?;
+            dict.set_item(key, tensor)?;
+        }
+        Ok(dict.into())
+    }
 }
 
 /// Opens a safetensors lazily and returns tensors as asked
@@ -1666,6 +1776,15 @@ impl safe_open {
     ///         The name of the tensors contained in that file
     pub fn offset_keys(&self) -> PyResult<Vec<String>> {
         self.inner()?.offset_keys()
+    }
+
+    /// Returns all tensors in the file as a dictionary.
+    ///
+    /// Returns:
+    ///     (`Dict[str, Tensor]`):
+    ///         A dictionary mapping tensor names to tensor objects.
+    pub fn get_tensors(&self, py: Python) -> PyResult<PyObject> {
+        self.inner()?.get_tensors(py)
     }
 
     /// Returns a full tensor
@@ -2397,6 +2516,23 @@ impl _safe_open_handle {
     ///         The name of the tensors contained in that file
     pub fn offset_keys(&self) -> PyResult<Vec<String>> {
         self.inner()?.offset_keys()
+    }
+
+    /// Returns all tensors in the file as a dictionary.
+    ///
+    /// Returns:
+    ///     (`Dict[str, Tensor]`):
+    ///         A dictionary mapping tensor names to tensor objects.
+    ///
+    /// Example:
+    /// ```python
+    /// from safetensors import safe_open
+    ///
+    /// with safe_open("model.safetensors", framework="pt", device=0) as f:
+    ///     tensors = f.get_tensors()
+    /// ```
+    pub fn get_tensors(&self, py: Python) -> PyResult<PyObject> {
+        self.inner()?.get_tensors(py)
     }
 
     /// Returns a full tensor

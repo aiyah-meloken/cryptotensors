@@ -80,7 +80,7 @@ def save_file(
     return numpy.save_file(np_tensors, filename, metadata=metadata, config=config)
 
 
-def load(data: bytes) -> Dict[str, tf.Tensor]:
+def load(data: bytes, config: Optional[Dict[str, Any]] = None) -> Dict[str, tf.Tensor]:
     """
     Loads a safetensors file into tensorflow format from pure bytes.
 
@@ -103,11 +103,11 @@ def load(data: bytes) -> Dict[str, tf.Tensor]:
     loaded = load(data)
     ```
     """
-    flat = numpy.load(data)
+    flat = numpy.load(data, config=config)
     return _np2tf(flat)
 
 
-def load_file(filename: Union[str, os.PathLike]) -> Dict[str, tf.Tensor]:
+def load_file(filename: Union[str, os.PathLike], config: Optional[Dict[str, Any]] = None) -> Dict[str, tf.Tensor]:
     """
     Loads a safetensors file into tensorflow format.
 
@@ -127,11 +127,8 @@ def load_file(filename: Union[str, os.PathLike]) -> Dict[str, tf.Tensor]:
     loaded = load_file(file_path)
     ```
     """
-    result = {}
-    with safe_open(filename, framework="tf") as f:
-        for k in f.offset_keys():
-            result[k] = f.get_tensor(k)
-    return result
+    with safe_open(filename, framework="tf", config=config) as f:
+        return f.get_tensors()
 
 
 def _np2tf(numpy_dict: Dict[str, np.ndarray]) -> Dict[str, tf.Tensor]:

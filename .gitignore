@@ -10,3 +10,15 @@ bindings/python/Cargo.lock
 *.cryptotensors
 *.npz
 .DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/

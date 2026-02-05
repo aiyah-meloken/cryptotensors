@@ -144,6 +144,19 @@ impl KeyMaterial {
         Ok(key_material)
     }
 
+    /// Create a sanitized copy of the key material (removes secrets)
+    pub fn sanitize(&self) -> Self {
+        Self {
+            key_type: self.key_type.clone(),
+            alg: self.alg.clone(),
+            kid: self.kid.clone(),
+            k: OnceCell::new(),        // Secrets removed
+            x_pub: self.x_pub.clone(), // Public key preserved
+            d_priv: OnceCell::new(),   // Private key removed
+            jku: self.jku.clone(),
+        }
+    }
+
     /// Load key from the registry
     ///
     /// This method retrieves the appropriate key from registered KeyProviders.

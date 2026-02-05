@@ -751,19 +751,23 @@ fn deserialize(
         let pydtype: PyObject = tensor.dtype().to_string().into_pyobject(py)?.into();
 
         let pydata: PyObject = if let Some(c) = crypto_obj {
-            let mut found = None;
-            if let Some(cryptor) = c.get(&tensor_name) {
+            let found = if let Some(cryptor) = c.get(&tensor_name) {
                 if let Some(arc_buf) = cryptor.buffer_arc() {
                     #[cfg(feature = "modern")]
                     {
-                        found = Some(DecryptedBuffer::new(arc_buf).into_pyobject(py)?.into());
+                        Some(DecryptedBuffer::new(arc_buf).into_pyobject(py)?.into())
                     }
                     #[cfg(not(feature = "modern"))]
                     {
                         let _ = arc_buf;
+                        None
                     }
+                } else {
+                    None
                 }
-            }
+            } else {
+                None
+            };
             if let Some(p) = found {
                 p
             } else {

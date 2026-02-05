@@ -129,8 +129,15 @@ class TensorflowAdapter(FrameworkAdapter):
         # TF has no simple allclose, verify via numpy
         import numpy as np
 
-        np1 = val1.numpy()
-        np2 = val2.numpy()
+        if hasattr(val1, "numpy"):
+            np1 = val1.numpy()
+        else:
+            np1 = val1
+
+        if hasattr(val2, "numpy"):
+            np2 = val2.numpy()
+        else:
+            np2 = val2
         np.testing.assert_allclose(np1, np2)
 
     def to_numpy(self, val):

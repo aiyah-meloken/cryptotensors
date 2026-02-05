@@ -130,7 +130,7 @@ def load_file(
     loaded = load_file(file_path)
     ```
     """
-    with safe_open(filename, framework="flax") as f:
+    with safe_open(filename, framework="flax", config=config) as f:
         return f.get_tensors()
 
 

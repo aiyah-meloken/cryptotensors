@@ -88,6 +88,8 @@ def load(data: bytes, config: Optional[Dict[str, Any]] = None) -> Dict[str, Arra
     Args:
         data (`bytes`):
             The content of a safetensors file
+        config (`Dict[str, Any]`, *optional*, defaults to `None`):
+            Optional encryption configuration.
 
     Returns:
         `Dict[str, Array]`: dictionary that contains name as key, value as `Array` on cpu
@@ -117,6 +119,8 @@ def load_file(
     Args:
         filename (`str`, or `os.PathLike`)):
             The name of the file which contains the tensors
+        config (`Dict[str, Any]`, *optional*, defaults to `None`):
+            Optional encryption configuration.
 
     Returns:
         `Dict[str, Array]`: dictionary that contains name as key, value as `Array`

@@ -328,6 +328,8 @@ def load_file(
         device (`Union[str, int]`, *optional*, defaults to `cpu`):
             The device where the tensors need to be located after load.
             available options are all regular torch device locations.
+        config (`Dict[str, Any]`, *optional*, defaults to `None`):
+            Optional encryption configuration.
 
     Returns:
         `Dict[str, torch.Tensor]`: dictionary that contains name as key, value as `torch.Tensor`
@@ -354,6 +356,8 @@ def load(
     Args:
         data (`bytes`):
             The content of a safetensors file
+        config (`Dict[str, Any]`, *optional*, defaults to `None`):
+            Optional encryption configuration.
 
     Returns:
         `Dict[str, torch.Tensor]`: dictionary that contains name as key, value as `torch.Tensor` on cpu

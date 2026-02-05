@@ -534,34 +534,35 @@ impl SingleCryptor {
     /// * `Encryption` - If data encryption fails
     /// * `KeyCreation` - If key creation fails
     fn encrypt(&self, data: &[u8]) -> Result<(), CryptoTensorsError> {
-        // 1. Get DEK (must be set by with_new_key or init)
-        let dek = self.data_key.get().ok_or(CryptoTensorsError::Encryption(
-            "Data key not initialized for encryption".to_string(),
-        ))?;
-
-        // Allocate page-aligned buffer using OS mmap
-        let mut mmap_buf = MmapBuffer::allocate(data.len()).map_err(|e| {
-            CryptoTensorsError::Encryption(format!("failed to allocate buffer: {}", e))
-        })?;
-
-        // Copy data to mmap buffer
-        mmap_buf.as_mut_slice().copy_from_slice(data);
-
-        // 2. Encrypt the data
-        // encrypt_data handles IV generation internally and performs in-place encryption
-        let (iv, tag) = encrypt_data(mmap_buf.as_mut_slice(), dek, &self.enc_algo)?;
-
-        self.iv
-            .set(iv)
-            .map_err(|_| CryptoTensorsError::Encryption("Failed to set iv".to_string()))?;
-        self.tag
-            .set(tag)
-            .map_err(|_| CryptoTensorsError::Encryption("Failed to set tag".to_string()))?;
-
         self.buffer
-            .set(Arc::new(mmap_buf))
-            .map_err(|_| CryptoTensorsError::Encryption("Failed to set buffer".to_string()))?;
-        Ok(())
+            .get_or_try_init(|| {
+                // 1. Get DEK (must be set by with_new_key or init)
+                let dek = self.data_key.get().ok_or(CryptoTensorsError::Encryption(
+                    "Data key not initialized for encryption".to_string(),
+                ))?;
+
+                // Allocate page-aligned buffer using OS mmap
+                let mut mmap_buf = MmapBuffer::allocate(data.len()).map_err(|e| {
+                    CryptoTensorsError::Encryption(format!("failed to allocate buffer: {}", e))
+                })?;
+
+                // Copy data to mmap buffer
+                mmap_buf.as_mut_slice().copy_from_slice(data);
+
+                // 2. Encrypt the data
+                // encrypt_data handles IV generation internally and performs in-place encryption
+                let (iv, tag) = encrypt_data(mmap_buf.as_mut_slice(), dek, &self.enc_algo)?;
+
+                self.iv
+                    .set(iv)
+                    .map_err(|_| CryptoTensorsError::Encryption("Failed to set iv".to_string()))?;
+                self.tag
+                    .set(tag)
+                    .map_err(|_| CryptoTensorsError::Encryption("Failed to set tag".to_string()))?;
+
+                Ok(Arc::new(mmap_buf))
+            })
+            .map(|_| ())
     }
 
     /// Returns the internal buffer as an Arc.

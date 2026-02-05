@@ -734,10 +734,10 @@ impl<'data> SafeTensors<'data> {
     /// Returns the tensors contained within the SafeTensors.
     /// The tensors returned are merely views and the data is not owned by this
     /// structure. If encryption is enabled, tensors are transparently decrypted.
-    pub fn tensors(&'data self) -> Vec<(String, TensorView<'data>)> {
+    pub fn tensors(&'data self) -> Result<Vec<(String, TensorView<'data>)>, SafeTensorError> {
         // Parallelly decrypt all tensors if encryption is present
         if let Some(ref c) = self.crypto {
-            let _ = c.par_decrypt_all(self.data, &self.metadata);
+            c.par_decrypt_all(self.data, &self.metadata)?;
         }
 
         let mut tensors = Vec::with_capacity(self.metadata.index_map().len());
@@ -759,7 +759,7 @@ impl<'data> SafeTensors<'data> {
             };
             tensors.push((name.to_string(), tensorview));
         }
-        tensors
+        Ok(tensors)
     }
 
     /// Returns an iterator over the tensors contained within the SafeTensors.
@@ -1405,7 +1405,7 @@ mod tests {
         fn test_roundtrip(metadata in arbitrary_metadata()) {
             let data: Vec<u8> = (0..data_size(&metadata)).map(|x| x as u8).collect();
             let before = SafeTensors { metadata, data: &data, crypto: None };
-            let tensors = before.tensors();
+            let tensors = before.tensors().unwrap();
             let bytes = serialize(tensors.iter().map(|(name, view)| (name.to_string(), view)), None, None).unwrap();
 
             let after = SafeTensors::deserialize(&bytes).unwrap();
@@ -1465,7 +1465,7 @@ mod tests {
             ]
         );
         let parsed = SafeTensors::deserialize(&out).unwrap();
-        let tensors: HashMap<_, _> = parsed.tensors().into_iter().collect();
+        let tensors: HashMap<_, _> = parsed.tensors().unwrap().into_iter().collect();
         assert_eq!(tensors, metadata);
     }
 

@@ -17,8 +17,6 @@ def crypto_config():
     Provide encryption config for benchmarks.
     Supports BENCH_CRYPTO_ALGO environment variable to choose algorithm.
     """
-    # Import locally to avoid issues with test structure in some environments
-
     algo = os.environ.get("BENCH_CRYPTO_ALGO", "aes256gcm")
     keys = generate_test_keys(algorithm=algo)
     config = create_crypto_config(**keys)

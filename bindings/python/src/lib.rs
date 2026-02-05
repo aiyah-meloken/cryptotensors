@@ -743,7 +743,9 @@ fn deserialize(
         .map_err(|e| SafetensorError::new_err(format!("Error while deserializing: {e}")))?;
 
     let crypto_obj = safetensor.crypto();
-    let tensors = safetensor.tensors();
+    let tensors = safetensor
+        .tensors()
+        .map_err(|e| SafetensorError::new_err(format!("Error decrypting tensors: {e}")))?;
     let mut items = Vec::with_capacity(tensors.len());
 
     for (tensor_name, tensor) in tensors {

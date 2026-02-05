@@ -750,8 +750,8 @@ fn deserialize(
         let pyshape: PyObject = PyList::new(py, tensor.shape().iter())?.into();
         let pydtype: PyObject = tensor.dtype().to_string().into_pyobject(py)?.into();
 
-        let pydata: PyObject = if let Some(ref c) = crypto_obj {
-            let found = None;
+        let pydata: PyObject = if let Some(c) = crypto_obj {
+            let mut found = None;
             if let Some(cryptor) = c.get(&tensor_name) {
                 if let Some(arc_buf) = cryptor.buffer_arc() {
                     #[cfg(feature = "modern")]

@@ -2311,7 +2311,7 @@ mod tests {
 
         let config = SerializeCryptoConfig::with_keys(enc_key.clone(), sign_key.clone());
 
-        let data = vec![0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let data = [0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0];
         let bytes: Vec<u8> = data.iter().flat_map(|f| f.to_le_bytes()).collect();
         let tensor = TensorView {
             dtype: Dtype::F32,

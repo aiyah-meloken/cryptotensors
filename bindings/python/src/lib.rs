@@ -134,22 +134,32 @@ static FLAX_MODULE: OnceLock<Py<PyModule>> = OnceLock::new();
 static MLX_MODULE: OnceLock<Py<PyModule>> = OnceLock::new();
 static PADDLE_MODULE: OnceLock<Py<PyModule>> = OnceLock::new();
 
-struct PyView<'a> {
+struct SafePyView {
+    #[allow(dead_code)]
+    owner: Py<PyBytes>,
     shape: Vec<usize>,
     dtype: Dtype,
-    data: &'a [u8],
+    data_ptr: *const u8,
     data_len: usize,
 }
 
-impl View for &PyView<'_> {
-    fn data(&self) -> std::borrow::Cow<'_, [u8]> {
-        Cow::Borrowed(self.data)
+unsafe impl Send for SafePyView {}
+unsafe impl Sync for SafePyView {}
+
+impl View for &SafePyView {
+    fn dtype(&self) -> Dtype {
+        self.dtype
     }
     fn shape(&self) -> &[usize] {
         &self.shape
     }
-    fn dtype(&self) -> Dtype {
-        self.dtype
+    fn data(&self) -> Cow<'_, [u8]> {
+        // Safety: We hold the owner (Py<PyBytes>) which keeps the data alive.
+        // We know PyBytes are immutable, so the data_ptr remains valid.
+        unsafe {
+            let slice = std::slice::from_raw_parts(self.data_ptr, self.data_len);
+            Cow::Borrowed(slice)
+        }
     }
     fn data_len(&self) -> usize {
         self.data_len
@@ -258,18 +268,10 @@ impl DecryptedBuffer {
     }
 }
 
-/// Result of prepare() to keep PyBytes alive
-struct PreparedTensors<'a> {
-    tensors: HashMap<String, PyView<'a>>,
-    #[allow(dead_code)]
-    _holders: Vec<PyBound<'a, PyBytes>>,
-}
-
-fn prepare<'a>(
-    tensor_dict: &'a HashMap<String, PyBound<'a, PyDict>>,
-) -> PyResult<PreparedTensors<'a>> {
+fn prepare(
+    tensor_dict: &HashMap<String, PyBound<PyDict>>,
+) -> PyResult<HashMap<String, SafePyView>> {
     let mut tensors = HashMap::with_capacity(tensor_dict.len());
-    let mut holders = Vec::with_capacity(tensor_dict.len());
 
     for (tensor_name, tensor_desc) in tensor_dict {
         let mut shape: Vec<usize> = tensor_desc
@@ -282,10 +284,8 @@ fn prepare<'a>(
 
         let data_obj: PyBound<PyBytes> = pydata.extract()?;
         let data_bytes: &[u8] = data_obj.as_bytes();
-        // Safety: The data is kept alive by `_holders` which retains `data_obj`.
-        // We extend the lifetime to 'a to store it in PyView.
-        let data_bytes: &'a [u8] = unsafe { std::mem::transmute(data_bytes) };
         let data_len = data_bytes.len();
+        let data_ptr = data_bytes.as_ptr();
 
         let pydtype = tensor_desc
             .get_item("dtype")?
@@ -322,19 +322,16 @@ fn prepare<'a>(
             shape[n - 1] *= 2;
         }
 
-        let tensor = PyView {
+        let tensor = SafePyView {
+            owner: data_obj.unbind(),
             shape,
             dtype,
-            data: data_bytes,
+            data_ptr,
             data_len,
         };
         tensors.insert(tensor_name.clone(), tensor);
-        holders.push(data_obj);
     }
-    Ok(PreparedTensors {
-        tensors,
-        _holders: holders,
-    })
+    Ok(tensors)
 }
 
 /// Serializes raw data.
@@ -374,11 +371,7 @@ fn serialize<'b>(
     config: Option<PyBound<PyAny>>,
 ) -> PyResult<PyBound<'b, PyBytes>> {
     let prepared = prepare(&tensor_dict)?;
-    let tensors: Vec<_> = prepared
-        .tensors
-        .iter()
-        .map(|(k, v)| (k.as_str(), v))
-        .collect();
+    let tensors: Vec<_> = prepared.iter().map(|(k, v)| (k.as_str(), v)).collect();
     let config = prepare_serialize_crypto(config)?;
     let out = cryptotensors::tensor::serialize(tensors, metadata, config.as_ref())
         .map_err(|e| SafetensorError::new_err(format!("Error while serializing: {e}")))?;
@@ -413,11 +406,7 @@ fn serialize_file(
     config: Option<PyBound<PyAny>>,
 ) -> PyResult<()> {
     let prepared = prepare(&tensor_dict)?;
-    let tensors: Vec<_> = prepared
-        .tensors
-        .iter()
-        .map(|(k, v)| (k.as_str(), v))
-        .collect();
+    let tensors: Vec<_> = prepared.iter().map(|(k, v)| (k.as_str(), v)).collect();
     let config = prepare_serialize_crypto(config)?;
 
     cryptotensors::tensor::serialize_to_file(

@@ -1137,8 +1137,6 @@ impl CryptoTensors {
 
         // Initialize cryptors after verification
         // Key should already be loaded by resolve_key_from_deserialize_config; fallback via resolve_key when allowed
-        // Initialize cryptors after verification
-        // Key should already be loaded by resolve_key_from_deserialize_config; fallback via resolve_key when allowed
         if enc_key.k.get().and_then(|v| v.as_ref()).is_none() {
             let params = Self::params_for_deserialize(&enc_key, config, DeserializeKeyKind::Enc);
             if params.registry_allowed {

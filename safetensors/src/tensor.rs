@@ -738,9 +738,7 @@ impl<'data> SafeTensors<'data> {
 
             // Transparently decrypt if crypto is available
             let data = if let Some(ref crypto) = self.crypto {
-                crypto
-                    .silent_decrypt_from_data(name, raw_data)
-                    .unwrap_or(raw_data)
+                crypto.silent_decrypt(name, raw_data).unwrap_or(raw_data)
             } else {
                 raw_data
             };
@@ -765,9 +763,7 @@ impl<'data> SafeTensors<'data> {
 
             // Transparently decrypt if crypto is available
             let data = if let Some(ref crypto) = self.crypto {
-                crypto
-                    .silent_decrypt_from_data(name, raw_data)
-                    .unwrap_or(raw_data)
+                crypto.silent_decrypt(name, raw_data).unwrap_or(raw_data)
             } else {
                 raw_data
             };
@@ -803,7 +799,7 @@ impl<'data> SafeTensors<'data> {
 
         // Transparently decrypt if crypto is available
         let data = if let Some(ref crypto) = self.crypto {
-            crypto.silent_decrypt_from_data(tensor_name, raw_data)?
+            crypto.silent_decrypt(tensor_name, raw_data)?
         } else {
             raw_data
         };

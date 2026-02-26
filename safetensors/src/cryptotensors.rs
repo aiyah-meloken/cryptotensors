@@ -514,7 +514,7 @@ impl SingleCryptor {
     ///
     /// * `Ok(&[u8])` - A reference to the decrypted data
     /// * `Err(CryptoTensorsError)` - If reading or decryption fails
-    fn decrypt(
+    fn decrypt_from_file(
         &self,
         file: &std::fs::File,
         file_offset: u64,
@@ -568,11 +568,11 @@ impl SingleCryptor {
             .map(|arc_ref| arc_ref.as_slice())
     }
 
-    /// Decrypt data from an in-memory buffer (for Rust crate API).
+    /// Decrypt data from an in-memory buffer.
     ///
     /// This copies the data from the provided slice and decrypts in-place.
-    /// Used by `SafeTensors::deserialize` where data is already in memory.
-    fn decrypt_from_data(&self, data: &[u8]) -> Result<&[u8], CryptoTensorsError> {
+    /// Used by both the Rust crate API and Python bindings (when data is already in memory).
+    fn decrypt(&self, data: &[u8]) -> Result<&[u8], CryptoTensorsError> {
         self.buffer
             .get_or_try_init(|| {
                 let data_key = Zeroizing::new(self.unwrap_key()?);
@@ -1262,7 +1262,7 @@ impl CryptoTensors {
     /// * `file` - The file to read from
     /// * `file_offset` - The byte offset in the file where the encrypted data starts
     /// * `len` - The number of bytes to read and decrypt
-    pub fn silent_decrypt(
+    pub fn silent_decrypt_from_file(
         &self,
         tensor_name: &str,
         file: &std::fs::File,
@@ -1271,23 +1271,23 @@ impl CryptoTensors {
     ) -> Result<(), CryptoTensorsError> {
         match self.get(tensor_name) {
             Some(cryptor) => {
-                cryptor.decrypt(file, file_offset, len)?;
+                cryptor.decrypt_from_file(file, file_offset, len)?;
                 Ok(())
             }
             None => Ok(()),
         }
     }
 
-    /// Decrypt data for a tensor from an in-memory buffer (for Rust crate API).
+    /// Silently decrypt data for a tensor from an in-memory buffer.
     ///
     /// If no encryptor exists for the tensor, returns the original data unchanged.
-    pub fn silent_decrypt_from_data<'a>(
+    pub fn silent_decrypt<'a>(
         &'a self,
         tensor_name: &str,
         data: &'a [u8],
     ) -> Result<&'a [u8], CryptoTensorsError> {
         match self.get(tensor_name) {
-            Some(cryptor) => cryptor.decrypt_from_data(data),
+            Some(cryptor) => cryptor.decrypt(data),
             None => Ok(data),
         }
     }

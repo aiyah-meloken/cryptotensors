@@ -212,7 +212,16 @@ impl DecryptedBuffer {
         (*view).buf = data_ptr as *mut c_void;
         (*view).len = data_len as isize;
         (*view).itemsize = 1;
-        (*view).readonly = 0; // Writable: allows torch.asarray zero-copy view
+        (*view).readonly = 0; // INTENTIONAL: We expose the buffer as writable so that
+                              // `torch.asarray()` can create a zero-copy view without an internal memcpy.
+                              // If readonly=1, PyTorch detects the buffer as read-only and silently copies
+                              // the data, defeating the purpose of zero-copy. Setting readonly=0 allows
+                              // PyTorch (and NumPy) to directly reference our `Arc<Vec<u8>>` memory.
+                              //
+                              // Safety: The underlying memory is heap-allocated (`Arc<Vec<u8>>`), so writes
+                              // through the tensor will not cause segfaults. Modifying tensor data will
+                              // mutate the cached decrypted buffer — this is the same shared-memory
+                              // semantics as PyTorch's `from_numpy()`.
         (*view).ndim = 1;
 
         // Format string for unsigned bytes
@@ -953,14 +962,13 @@ impl Version {
     }
 }
 
-/// MODIFIED: Added raw_mmap, crypto, and file fields for encryption support.
+/// MODIFIED: Added crypto and file fields for encryption support.
 struct Open {
     metadata: Metadata,
     offset: usize,
     framework: Framework,
     device: Device,
     storage: Arc<Storage>,
-    raw_mmap: Option<Arc<Storage>>, // Storage for direct access to the data (needed for decryption)
     crypto: Option<Arc<CryptoTensors>>,
     file: Option<Arc<File>>, // File handle for pread-based decryption (encrypted path only)
 }
@@ -973,12 +981,12 @@ impl Open {
         device: Option<Device>,
         config: Option<DeserializeCryptoConfig>,
     ) -> PyResult<Self> {
-        let file = File::open(&filename).map_err(|_| {
+        let file = Arc::new(File::open(&filename).map_err(|_| {
             PyFileNotFoundError::new_err(format!(
                 "No such file or directory: {}",
                 filename.display()
             ))
-        })?;
+        })?);
         let device = device.unwrap_or(Device::Cpu);
         if device != Device::Cpu
             && framework != Framework::Pytorch
@@ -991,7 +999,7 @@ impl Open {
 
         // SAFETY: Mmap is used to prevent allocating in Rust
         // before making a copy within Python.
-        let buffer = unsafe { MmapOptions::new().map_copy_read_only(&file)? };
+        let buffer = unsafe { MmapOptions::new().map_copy_read_only(&*file)? };
 
         let (n, metadata) = SafeTensors::read_metadata(&buffer).map_err(|e| {
             SafetensorError::new_err(format!("Error while deserializing header: {e}"))
@@ -1026,9 +1034,9 @@ impl Open {
             Ok(())
         })?;
 
-        let (storage, raw_mmap) = match &framework {
+        let storage = match &framework {
             Framework::Paddle => {
-                Python::with_gil(|py| -> PyResult<(Storage, Option<Arc<Storage>>)> {
+                Python::with_gil(|py| -> PyResult<Storage> {
                     let paddle = get_module(py, &PADDLE_MODULE)?;
                     let version: String = paddle.getattr(intern!(py, "__version__"))?.extract()?;
                     let version =
@@ -1060,19 +1068,16 @@ impl Open {
                         let gil_storage = OnceLock::new();
                         gil_storage.get_or_init_py_attached(py, || storage);
 
-                        // MODIFIED: Keep raw mmap for crypto operations
-                        let raw_mmap = crypto.as_ref().map(|_| Arc::new(Storage::Mmap(buffer)));
-
-                        Ok((Storage::PaddleStorage(gil_storage), raw_mmap))
+                        Ok(Storage::PaddleStorage(gil_storage))
                     } else {
                         let module = PyModule::import(py, intern!(py, "numpy"))?;
                         NUMPY_MODULE.get_or_init_py_attached(py, || module.into());
-                        Ok((Storage::Mmap(buffer), None))
+                        Ok(Storage::Mmap(buffer))
                     }
                 })?
             }
             Framework::Pytorch => {
-                Python::with_gil(|py| -> PyResult<(Storage, Option<Arc<Storage>>)> {
+                Python::with_gil(|py| -> PyResult<Storage> {
                     let module = get_module(py, &TORCH_MODULE)?;
 
                     let version: String = module.getattr(intern!(py, "__version__"))?.extract()?;
@@ -1117,28 +1122,21 @@ impl Open {
                         let gil_storage = OnceLock::new();
                         gil_storage.get_or_init_py_attached(py, || storage);
 
-                        // MODIFIED: Keep raw mmap for crypto operations
-                        let raw_mmap = crypto.as_ref().map(|_| Arc::new(Storage::Mmap(buffer)));
-
-                        Ok((Storage::TorchStorage(gil_storage), raw_mmap))
+                        Ok(Storage::TorchStorage(gil_storage))
                     } else {
-                        Ok((Storage::Mmap(buffer), None))
+                        Ok(Storage::Mmap(buffer))
                     }
                 })?
             }
-            _ => (Storage::Mmap(buffer), None),
+            _ => Storage::Mmap(buffer),
         };
 
         let storage = Arc::new(storage);
 
-        // Keep file handle for pread-based decryption (encrypted path only)
-        let file_handle = if crypto.is_some() {
-            Some(Arc::new(File::open(&filename).map_err(|e| {
-                SafetensorError::new_err(format!("Failed to reopen file for pread: {e}"))
-            })?))
-        } else {
-            None
-        };
+        // Reuse file handle for pread-based decryption (encrypted path only).
+        // pread (read_exact_at on Unix) does not modify the file offset,
+        // so sharing the same fd with mmap is safe.
+        let file_handle = if crypto.is_some() { Some(file) } else { None };
 
         Ok(Self {
             metadata,
@@ -1146,7 +1144,6 @@ impl Open {
             framework,
             device,
             storage,
-            raw_mmap,
             crypto,
             file: file_handle,
         })
@@ -1249,7 +1246,7 @@ impl Open {
                     let file_offset = (info.data_offsets.0 + self.offset) as u64;
                     let data_len = info.data_offsets.1 - info.data_offsets.0;
                     crypto
-                        .silent_decrypt(name, file, file_offset, data_len)
+                        .silent_decrypt_from_file(name, file, file_offset, data_len)
                         .map_err(|e| {
                             SafetensorError::new_err(format!("Decryption failed: {e:?}"))
                         })?;
@@ -1337,7 +1334,7 @@ impl Open {
                         let file_offset = (info.data_offsets.0 + self.offset) as u64;
                         let data_len = info.data_offsets.1 - info.data_offsets.0;
                         crypto
-                            .silent_decrypt(name, file, file_offset, data_len)
+                            .silent_decrypt_from_file(name, file, file_offset, data_len)
                             .map_err(|e| {
                                 SafetensorError::new_err(format!("Decryption failed: {e:?}"))
                             })?;
@@ -1456,7 +1453,7 @@ impl Open {
                             let file_offset = (info.data_offsets.0 + self.offset) as u64;
                             let data_len = info.data_offsets.1 - info.data_offsets.0;
                             crypto
-                                .silent_decrypt(name, file, file_offset, data_len)
+                                .silent_decrypt_from_file(name, file, file_offset, data_len)
                                 .map_err(|e| {
                                     SafetensorError::new_err(format!("Decryption failed: {e:?}"))
                                 })?;
@@ -1576,7 +1573,6 @@ impl Open {
                 offset: self.offset,
                 device: self.device.clone(),
                 storage: self.storage.clone(),
-                raw_mmap: self.raw_mmap.clone(),
                 crypto: self.crypto.clone(),
                 file: self.file.clone(),
             })
@@ -1725,7 +1721,7 @@ impl safe_open {
     }
 }
 
-/// MODIFIED: Added name, raw_mmap, and crypto fields for decryption support.
+/// MODIFIED: Added name, crypto, and file fields for decryption support.
 #[pyclass]
 struct PySafeSlice {
     name: String,
@@ -1734,7 +1730,6 @@ struct PySafeSlice {
     offset: usize,
     device: Device,
     storage: Arc<Storage>,
-    raw_mmap: Option<Arc<Storage>>,
     crypto: Option<Arc<CryptoTensors>>,
     file: Option<Arc<File>>,
 }
@@ -1838,7 +1833,7 @@ impl PySafeSlice {
                     let file_offset = (self.info.data_offsets.0 + self.offset) as u64;
                     let data_len = self.info.data_offsets.1 - self.info.data_offsets.0;
                     crypto
-                        .silent_decrypt(&self.name, file, file_offset, data_len)
+                        .silent_decrypt_from_file(&self.name, file, file_offset, data_len)
                         .map_err(|e| {
                             SafetensorError::new_err(format!("Decryption failed: {e:?}"))
                         })?;
@@ -1934,7 +1929,7 @@ impl PySafeSlice {
                     let file_offset = (self.info.data_offsets.0 + self.offset) as u64;
                     let data_len = self.info.data_offsets.1 - self.info.data_offsets.0;
                     crypto
-                        .silent_decrypt(&self.name, file, file_offset, data_len)
+                        .silent_decrypt_from_file(&self.name, file, file_offset, data_len)
                         .map_err(|e| {
                             SafetensorError::new_err(format!("Decryption failed: {e:?}"))
                         })?;
@@ -2057,7 +2052,7 @@ impl PySafeSlice {
                     let file_offset = (self.info.data_offsets.0 + self.offset) as u64;
                     let data_len = self.info.data_offsets.1 - self.info.data_offsets.0;
                     crypto
-                        .silent_decrypt(&self.name, file, file_offset, data_len)
+                        .silent_decrypt_from_file(&self.name, file, file_offset, data_len)
                         .map_err(|e| {
                             SafetensorError::new_err(format!("Decryption failed: {e:?}"))
                         })?;

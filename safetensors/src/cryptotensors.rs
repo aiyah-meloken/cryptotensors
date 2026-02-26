@@ -499,22 +499,80 @@ impl SingleCryptor {
         Ok(data_key)
     }
 
-    /// Decrypt data using the master key
+    /// Decrypt data by reading directly from the file via pread.
+    ///
+    /// Uses a single pread syscall to read encrypted data into a pre-allocated
+    /// buffer, then decrypts in-place. This bypasses mmap page fault overhead.
     ///
     /// # Arguments
     ///
-    /// * `data` - The encrypted data to decrypt
+    /// * `file` - The file to read from
+    /// * `file_offset` - The byte offset in the file where the encrypted data starts
+    /// * `len` - The number of bytes to read and decrypt
     ///
     /// # Returns
     ///
     /// * `Ok(&[u8])` - A reference to the decrypted data
-    /// * `Err(CryptoTensorsError)` - If decryption fails
+    /// * `Err(CryptoTensorsError)` - If reading or decryption fails
+    fn decrypt(
+        &self,
+        file: &std::fs::File,
+        file_offset: u64,
+        len: usize,
+    ) -> Result<&[u8], CryptoTensorsError> {
+        self.buffer
+            .get_or_try_init(|| {
+                let data_key = Zeroizing::new(self.unwrap_key()?);
+
+                // Read directly from file via pread (Unix) or seek+read (Windows)
+                let mut buffer = vec![0u8; len];
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::FileExt;
+                    file.read_exact_at(&mut buffer, file_offset).map_err(|e| {
+                        CryptoTensorsError::Decryption(format!("pread failed: {}", e))
+                    })?;
+                }
+                #[cfg(not(unix))]
+                {
+                    use std::io::{Read, Seek, SeekFrom};
+                    let mut file = file;
+                    file.seek(SeekFrom::Start(file_offset)).map_err(|e| {
+                        CryptoTensorsError::Decryption(format!("seek failed: {}", e))
+                    })?;
+                    file.read_exact(&mut buffer).map_err(|e| {
+                        CryptoTensorsError::Decryption(format!("read failed: {}", e))
+                    })?;
+                }
+
+                decrypt_data(
+                    &mut buffer,
+                    data_key.as_slice(),
+                    &self.enc_algo,
+                    BASE64
+                        .decode(self.iv.get().ok_or_else(|| {
+                            CryptoTensorsError::KeyUnwrap("iv is empty".to_string())
+                        })?)
+                        .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
+                        .as_slice(),
+                    BASE64
+                        .decode(self.tag.get().ok_or_else(|| {
+                            CryptoTensorsError::KeyUnwrap("tag is empty".to_string())
+                        })?)
+                        .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
+                        .as_slice(),
+                )?;
+
+                Ok(Arc::new(buffer))
+            })
+            .map(|arc_ref| arc_ref.as_slice())
+    }
+
+    /// Decrypt data from an in-memory buffer (for Rust crate API).
     ///
-    /// # Errors
-    ///
-    /// * `KeyUnwrap` - If key unwrapping fails
-    /// * `Decryption` - If data decryption fails
-    fn decrypt(&self, data: &[u8]) -> Result<&[u8], CryptoTensorsError> {
+    /// This copies the data from the provided slice and decrypts in-place.
+    /// Used by `SafeTensors::deserialize` where data is already in memory.
+    fn decrypt_from_data(&self, data: &[u8]) -> Result<&[u8], CryptoTensorsError> {
         self.buffer
             .get_or_try_init(|| {
                 let data_key = Zeroizing::new(self.unwrap_key()?);
@@ -1194,27 +1252,43 @@ impl CryptoTensors {
         }))
     }
 
-    /// Silently decrypt data for a tensor
+    /// Silently decrypt data for a tensor by reading directly from file.
     ///
-    /// If no encryptor exists for the tensor, returns the original data unchanged.
+    /// If no encryptor exists for the tensor, does nothing and returns Ok(()).
     ///
     /// # Arguments
     ///
     /// * `tensor_name` - The name of the tensor
-    /// * `data` - The encrypted data to decrypt
+    /// * `file` - The file to read from
+    /// * `file_offset` - The byte offset in the file where the encrypted data starts
+    /// * `len` - The number of bytes to read and decrypt
+    pub fn silent_decrypt(
+        &self,
+        tensor_name: &str,
+        file: &std::fs::File,
+        file_offset: u64,
+        len: usize,
+    ) -> Result<(), CryptoTensorsError> {
+        match self.get(tensor_name) {
+            Some(cryptor) => {
+                cryptor.decrypt(file, file_offset, len)?;
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// Decrypt data for a tensor from an in-memory buffer (for Rust crate API).
     ///
-    /// # Returns
-    ///
-    /// * `Ok(&[u8])` - The decrypted data, or the original data if no encryptor exists
-    /// * `Err(CryptoTensorsError)` - If decryption fails
-    pub fn silent_decrypt<'a>(
+    /// If no encryptor exists for the tensor, returns the original data unchanged.
+    pub fn silent_decrypt_from_data<'a>(
         &'a self,
         tensor_name: &str,
         data: &'a [u8],
     ) -> Result<&'a [u8], CryptoTensorsError> {
         match self.get(tensor_name) {
-            Some(cryptor) => cryptor.decrypt(data),
-            None => Ok(data), // Return original data if no cryptor is found
+            Some(cryptor) => cryptor.decrypt_from_data(data),
+            None => Ok(data),
         }
     }
 

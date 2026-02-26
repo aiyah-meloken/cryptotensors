@@ -953,7 +953,7 @@ impl Version {
     }
 }
 
-/// MODIFIED: Added raw_mmap and crypto fields for encryption support.
+/// MODIFIED: Added raw_mmap, crypto, and file fields for encryption support.
 struct Open {
     metadata: Metadata,
     offset: usize,
@@ -962,6 +962,7 @@ struct Open {
     storage: Arc<Storage>,
     raw_mmap: Option<Arc<Storage>>, // Storage for direct access to the data (needed for decryption)
     crypto: Option<Arc<CryptoTensors>>,
+    file: Option<Arc<File>>, // File handle for pread-based decryption (encrypted path only)
 }
 
 impl Open {
@@ -1130,6 +1131,15 @@ impl Open {
 
         let storage = Arc::new(storage);
 
+        // Keep file handle for pread-based decryption (encrypted path only)
+        let file_handle = if crypto.is_some() {
+            Some(Arc::new(File::open(&filename).map_err(|e| {
+                SafetensorError::new_err(format!("Failed to reopen file for pread: {e}"))
+            })?))
+        } else {
+            None
+        };
+
         Ok(Self {
             metadata,
             offset,
@@ -1138,6 +1148,7 @@ impl Open {
             storage,
             raw_mmap,
             crypto,
+            file: file_handle,
         })
     }
 
@@ -1230,12 +1241,18 @@ impl Open {
                 let data =
                     &mmap[info.data_offsets.0 + self.offset..info.data_offsets.1 + self.offset];
 
-                // MODIFIED: Use zero-copy DecryptedBuffer for encrypted data
+                // MODIFIED: Use pread + zero-copy DecryptedBuffer for encrypted data
                 let array: PyObject = if let Some(crypto) = &self.crypto {
-                    // Decrypt first (populates cache)
-                    crypto.silent_decrypt(name, data).map_err(|e| {
-                        SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                    let file = self.file.as_ref().ok_or_else(|| {
+                        SafetensorError::new_err("File handle missing for decryption")
                     })?;
+                    let file_offset = (info.data_offsets.0 + self.offset) as u64;
+                    let data_len = info.data_offsets.1 - info.data_offsets.0;
+                    crypto
+                        .silent_decrypt(name, file, file_offset, data_len)
+                        .map_err(|e| {
+                            SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                        })?;
                     // Get Arc for zero-copy
                     if let Some(arc_data) = crypto.get_buffer(name) {
                         // Zero-copy: wrap Arc in DecryptedBuffer
@@ -1314,21 +1331,16 @@ impl Open {
                     // For non-encrypted tensors, use the original storage_slice.view() directly
                     let mut tensor = if self.crypto.as_ref().and_then(|c| c.get(name)).is_some() {
                         let crypto = self.crypto.as_ref().unwrap();
-                        // Get raw data for decryption
-                        let data = if let Some(raw_mmap) = &self.raw_mmap {
-                            if let Storage::Mmap(mmap) = raw_mmap.as_ref() {
-                                &mmap[info.data_offsets.0 + self.offset
-                                    ..info.data_offsets.1 + self.offset]
-                            } else {
-                                return Err(SafetensorError::new_err("raw_mmap is not Mmap"));
-                            }
-                        } else {
-                            return Err(SafetensorError::new_err("raw_mmap is None"));
-                        };
-                        // Zero-copy: use DecryptedBuffer
-                        crypto.silent_decrypt(name, data).map_err(|e| {
-                            SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                        let file = self.file.as_ref().ok_or_else(|| {
+                            SafetensorError::new_err("File handle missing for decryption")
                         })?;
+                        let file_offset = (info.data_offsets.0 + self.offset) as u64;
+                        let data_len = info.data_offsets.1 - info.data_offsets.0;
+                        crypto
+                            .silent_decrypt(name, file, file_offset, data_len)
+                            .map_err(|e| {
+                                SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                            })?;
                         let array: PyObject = if let Some(arc_data) = crypto.get_buffer(name) {
                             #[cfg(feature = "modern")]
                             {
@@ -1340,7 +1352,7 @@ impl Open {
                                 PyByteArray::new(py, arc_data.as_slice()).into_any().into()
                             }
                         } else {
-                            PyByteArray::new(py, data).into_any().into()
+                            return Err(SafetensorError::new_err("Decrypted buffer not found"));
                         };
                         // Encrypted path: use paddle.to_tensor() for decrypted bytes
                         paddle
@@ -1434,28 +1446,22 @@ impl Open {
                         .getattr(intern!(py, "__getitem__"))?
                         .call1((slice,))?;
 
-                    // MODIFIED: Handle encrypted tensors using zero-copy DecryptedBuffer
+                    // MODIFIED: Handle encrypted tensors using pread + zero-copy DecryptedBuffer
                     let array: PyObject =
                         if self.crypto.as_ref().and_then(|c| c.get(name)).is_some() {
                             let crypto = self.crypto.as_ref().unwrap();
-                            // Get raw data and decrypt if needed
-                            let data = if let Some(raw_mmap) = &self.raw_mmap {
-                                if let Storage::Mmap(mmap) = raw_mmap.as_ref() {
-                                    &mmap[info.data_offsets.0 + self.offset
-                                        ..info.data_offsets.1 + self.offset]
-                                } else {
-                                    return Err(SafetensorError::new_err("raw_mmap is not Mmap"));
-                                }
-                            } else {
-                                return Err(SafetensorError::new_err("raw_mmap is None"));
-                            };
-                            // Decrypt (populates cache)
-                            crypto.silent_decrypt(name, data).map_err(|e| {
-                                SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                            let file = self.file.as_ref().ok_or_else(|| {
+                                SafetensorError::new_err("File handle missing for decryption")
                             })?;
+                            let file_offset = (info.data_offsets.0 + self.offset) as u64;
+                            let data_len = info.data_offsets.1 - info.data_offsets.0;
+                            crypto
+                                .silent_decrypt(name, file, file_offset, data_len)
+                                .map_err(|e| {
+                                    SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                                })?;
                             // Zero-copy: use DecryptedBuffer
                             if let Some(arc_data) = crypto.get_buffer(name) {
-                                // Zero-copy: use DecryptedBuffer
                                 #[cfg(feature = "modern")]
                                 {
                                     let buffer = DecryptedBuffer::new(arc_data);
@@ -1466,7 +1472,7 @@ impl Open {
                                     PyByteArray::new(py, &arc_data).into_any().into()
                                 }
                             } else {
-                                PyByteArray::new(py, data).into_any().into()
+                                storage_slice.into()
                             }
                         } else {
                             storage_slice.into()
@@ -1572,6 +1578,7 @@ impl Open {
                 storage: self.storage.clone(),
                 raw_mmap: self.raw_mmap.clone(),
                 crypto: self.crypto.clone(),
+                file: self.file.clone(),
             })
         } else {
             Err(SafetensorError::new_err(format!(
@@ -1729,6 +1736,7 @@ struct PySafeSlice {
     storage: Arc<Storage>,
     raw_mmap: Option<Arc<Storage>>,
     crypto: Option<Arc<CryptoTensors>>,
+    file: Option<Arc<File>>,
 }
 
 #[derive(FromPyObject)]
@@ -1821,16 +1829,26 @@ impl PySafeSlice {
                         }
                     }
                 };
-                let data = &mmap[self.info.data_offsets.0 + self.offset
-                    ..self.info.data_offsets.1 + self.offset];
-
-                // MODIFIED: Decrypt if crypto is present
+                // MODIFIED: Decrypt via pread if crypto is present
+                let _arc_guard; // Holds Arc alive for decrypted data
                 let data = if let Some(crypto) = &self.crypto {
-                    crypto.silent_decrypt(&self.name, data).map_err(|e| {
-                        SafetensorError::new_err(format!("Decryption failed: {e:?}"))
-                    })?
+                    let file = self.file.as_ref().ok_or_else(|| {
+                        SafetensorError::new_err("File handle missing for decryption")
+                    })?;
+                    let file_offset = (self.info.data_offsets.0 + self.offset) as u64;
+                    let data_len = self.info.data_offsets.1 - self.info.data_offsets.0;
+                    crypto
+                        .silent_decrypt(&self.name, file, file_offset, data_len)
+                        .map_err(|e| {
+                            SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                        })?;
+                    _arc_guard = crypto.get_buffer(&self.name).ok_or_else(|| {
+                        SafetensorError::new_err("Decryption did not populate buffer")
+                    })?;
+                    _arc_guard.as_slice()
                 } else {
-                    data
+                    &mmap[self.info.data_offsets.0 + self.offset
+                        ..self.info.data_offsets.1 + self.offset]
                 };
 
                 let shape = self.info.shape.clone();
@@ -1910,21 +1928,16 @@ impl PySafeSlice {
                     .is_some()
                 {
                     let crypto = self.crypto.as_ref().unwrap();
-                    // Get raw data and decrypt
-                    let data = if let Some(raw_mmap) = &self.raw_mmap {
-                        if let Storage::Mmap(mmap) = raw_mmap.as_ref() {
-                            &mmap[self.info.data_offsets.0 + self.offset
-                                ..self.info.data_offsets.1 + self.offset]
-                        } else {
-                            return Err(SafetensorError::new_err("raw_mmap is not Mmap"));
-                        }
-                    } else {
-                        return Err(SafetensorError::new_err("raw_mmap is None"));
-                    };
-                    // Decrypt (populates cache)
-                    crypto.silent_decrypt(&self.name, data).map_err(|e| {
-                        SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                    let file = self.file.as_ref().ok_or_else(|| {
+                        SafetensorError::new_err("File handle missing for decryption")
                     })?;
+                    let file_offset = (self.info.data_offsets.0 + self.offset) as u64;
+                    let data_len = self.info.data_offsets.1 - self.info.data_offsets.0;
+                    crypto
+                        .silent_decrypt(&self.name, file, file_offset, data_len)
+                        .map_err(|e| {
+                            SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                        })?;
                     // Zero-copy: use DecryptedBuffer
                     if let Some(arc_data) = crypto.get_buffer(&self.name) {
                         #[cfg(feature = "modern")]
@@ -1937,7 +1950,7 @@ impl PySafeSlice {
                             PyByteArray::new(py, &arc_data).into_any().into()
                         }
                     } else {
-                        PyByteArray::new(py, data).into_any().into()
+                        return Err(SafetensorError::new_err("Decrypted buffer not found"));
                     }
                 } else {
                     storage_slice.into()
@@ -2038,21 +2051,16 @@ impl PySafeSlice {
                     .is_some()
                 {
                     let crypto = self.crypto.as_ref().unwrap();
-                    // Get raw data and decrypt
-                    let data = if let Some(raw_mmap) = &self.raw_mmap {
-                        if let Storage::Mmap(mmap) = raw_mmap.as_ref() {
-                            &mmap[self.info.data_offsets.0 + self.offset
-                                ..self.info.data_offsets.1 + self.offset]
-                        } else {
-                            return Err(SafetensorError::new_err("raw_mmap is not Mmap"));
-                        }
-                    } else {
-                        return Err(SafetensorError::new_err("raw_mmap is None"));
-                    };
-                    // Decrypt (populates cache)
-                    crypto.silent_decrypt(&self.name, data).map_err(|e| {
-                        SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                    let file = self.file.as_ref().ok_or_else(|| {
+                        SafetensorError::new_err("File handle missing for decryption")
                     })?;
+                    let file_offset = (self.info.data_offsets.0 + self.offset) as u64;
+                    let data_len = self.info.data_offsets.1 - self.info.data_offsets.0;
+                    crypto
+                        .silent_decrypt(&self.name, file, file_offset, data_len)
+                        .map_err(|e| {
+                            SafetensorError::new_err(format!("Decryption failed: {e:?}"))
+                        })?;
                     // Zero-copy: use DecryptedBuffer
                     let array: PyObject = if let Some(arc_data) = crypto.get_buffer(&self.name) {
                         #[cfg(feature = "modern")]
@@ -2065,7 +2073,7 @@ impl PySafeSlice {
                             PyByteArray::new(py, &arc_data).into_any().into()
                         }
                     } else {
-                        PyByteArray::new(py, data).into_any().into()
+                        return Err(SafetensorError::new_err("Decrypted buffer not found"));
                     };
                     // Encrypted path: use paddle.to_tensor() for decrypted bytes
                     paddle

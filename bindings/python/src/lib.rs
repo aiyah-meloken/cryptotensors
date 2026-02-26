@@ -188,8 +188,10 @@ impl DecryptedBuffer {
 impl DecryptedBuffer {
     /// Get buffer info for Python buffer protocol (Python 3.11+ stable ABI)
     ///
-    /// Note: We expose this as a read-only buffer. PyTorch will issue a warning
-    /// but will work correctly by copying data when mutation is needed.
+    /// We expose this as a writable buffer so that `torch.asarray()` can
+    /// create a zero-copy view without an internal memcpy. The underlying
+    /// `Arc<Vec<u8>>` is kept alive via `_cryptotensors_buffer_ref` on the
+    /// tensor, ensuring the memory remains valid for the tensor's lifetime.
     #[cfg(all(any(not(Py_LIMITED_API), Py_3_11), not(PyPy)))]
     unsafe fn __getbuffer__(
         slf: pyo3::PyRef<'_, Self>,
@@ -202,9 +204,6 @@ impl DecryptedBuffer {
             return Err(pyo3::exceptions::PyBufferError::new_err("View is null"));
         }
 
-        // Note: We don't check PyBUF_WRITABLE - we expose as readonly and let
-        // the caller (PyTorch/JAX) handle it. They will copy if they need to mutate.
-
         let slice = slf.data.as_slice();
         let data_ptr = slice.as_ptr();
         let data_len = slice.len();
@@ -213,7 +212,7 @@ impl DecryptedBuffer {
         (*view).buf = data_ptr as *mut c_void;
         (*view).len = data_len as isize;
         (*view).itemsize = 1;
-        (*view).readonly = 1; // Mark as read-only
+        (*view).readonly = 0; // Writable: allows torch.asarray zero-copy view
         (*view).ndim = 1;
 
         // Format string for unsigned bytes

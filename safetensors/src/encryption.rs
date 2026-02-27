@@ -9,6 +9,7 @@ use ring::rand::SecureRandom;
 use ring::{aead, rand};
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 
 /// Supported encryption algorithms for tensor data encryption
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,42 +92,41 @@ impl EncryptionAlgorithm {
     }
 }
 
-/// Encrypt data using the specified algorithm
+/// Context holding a prepared key for repeated cryptographic operations.
 ///
-/// This function performs in-place encryption of the input data using the specified
-/// encryption algorithm. The encrypted data remains in the input buffer, and the
-/// nonce (IV) and authentication tag are returned separately.
+/// This encapsulates `ring::aead::LessSafeKey` to allow sharing the key material
+/// across threads and operations without re-initializing the key stream.
+#[derive(Clone)]
+pub struct PreparedKeyContext {
+    /// The algorithm associated with this key
+    pub algo: EncryptionAlgorithm,
+    /// The prepared key, wrapped in an Arc for cheap cloning across threads
+    pub key: Arc<aead::LessSafeKey>,
+}
+
+impl fmt::Debug for PreparedKeyContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PreparedKeyContext")
+            .field("algo", &self.algo)
+            .finish() // Explicitly omit the key material from debug output
+    }
+}
+
+/// Create a reusable context holding a prepared key
 ///
 /// # Arguments
 ///
-/// * `in_out` - The buffer containing the data to encrypt. The encrypted data will be
-///   written back to this buffer.
 /// * `key` - The encryption key to use
 /// * `algo_name` - The name of the encryption algorithm to use
 ///
 /// # Returns
 ///
-/// * `Ok((Vec<u8>, Vec<u8>))` - A tuple containing the nonce (IV) and authentication tag
-/// * `Err(CryptoTensorsError)` - If encryption fails
-///
-/// # Errors
-///
-/// * `InvalidKeyLength` - If the key length is invalid for the algorithm
-/// * `InvalidAlgorithm` - If the algorithm name is not supported
-/// * `RandomGeneration` - If random nonce generation fails
-/// * `KeyCreation` - If key creation fails
-/// * `Encryption` - If the encryption operation fails
-pub fn encrypt_data(
-    in_out: &mut [u8],
+/// * `Ok(PreparedKeyContext)` - The prepared key context
+/// * `Err(CryptoTensorsError)` - If key creation fails
+pub fn prepare_key_context(
     key: &[u8],
     algo_name: &str,
-) -> Result<(Vec<u8>, Vec<u8>), CryptoTensorsError> {
-    // If input is empty, return empty IV and tag
-    if in_out.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
-    }
-
-    // Validate inputs
+) -> Result<PreparedKeyContext, CryptoTensorsError> {
     let algo = algo_name
         .parse::<EncryptionAlgorithm>()
         .map_err(|_| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
@@ -145,11 +145,32 @@ pub fn encrypt_data(
         });
     }
 
-    // Create aead key
     let aead_algo = algo.get_aead_algo();
-    let key = aead::UnboundKey::new(aead_algo, key)
+    let unbound_key = aead::UnboundKey::new(aead_algo, key)
         .map_err(|e| CryptoTensorsError::KeyCreation(e.to_string()))?;
-    let key = aead::LessSafeKey::new(key);
+    let less_safe_key = aead::LessSafeKey::new(unbound_key);
+
+    Ok(PreparedKeyContext {
+        algo,
+        key: Arc::new(less_safe_key),
+    })
+}
+
+/// Encrypt data using a prepared key context
+///
+/// # Arguments
+///
+/// * `in_out` - The buffer containing the data to encrypt.
+/// * `ctx` - The prepared key context
+pub fn encrypt_data(
+    in_out: &mut [u8],
+    ctx: &PreparedKeyContext,
+) -> Result<(Vec<u8>, Vec<u8>), CryptoTensorsError> {
+    if in_out.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let aead_algo = ctx.algo.get_aead_algo();
 
     // Generate a new nonce
     let mut nonce_bytes = vec![0u8; aead_algo.nonce_len()];
@@ -159,44 +180,25 @@ pub fn encrypt_data(
     let nonce = aead::Nonce::assume_unique_for_key(nonce_bytes.clone().try_into().unwrap());
 
     // Encrypt the data in place
-    let tag = key
+    let tag = ctx
+        .key
         .seal_in_place_separate_tag(nonce, aead::Aad::empty(), in_out)
         .map_err(|e| CryptoTensorsError::Encryption(e.to_string()))?;
 
     Ok((nonce_bytes, tag.as_ref().to_vec()))
 }
 
-/// Decrypt data using the specified algorithm
-///
-/// This function performs in-place decryption of the input data using the specified
-/// encryption algorithm, nonce (IV), and authentication tag.
+/// Decrypt data using a prepared key context
 ///
 /// # Arguments
 ///
-/// * `in_out` - The buffer containing the encrypted data. The decrypted data will be
-///   written back to this buffer.
-/// * `key` - The decryption key to use
-/// * `algo_name` - The name of the encryption algorithm that was used
+/// * `in_out` - The buffer containing the encrypted data.
+/// * `ctx` - The prepared key context
 /// * `iv` - The nonce (IV) used during encryption
 /// * `tag` - The authentication tag from encryption
-///
-/// # Returns
-///
-/// * `Ok(())` - If decryption succeeds
-/// * `Err(CryptoTensorsError)` - If decryption fails
-///
-/// # Errors
-///
-/// * `InvalidKeyLength` - If the key length is invalid for the algorithm
-/// * `InvalidAlgorithm` - If the algorithm name is not supported
-/// * `InvalidIvLength` - If the IV length is invalid
-/// * `InvalidTagLength` - If the tag length is invalid
-/// * `KeyCreation` - If key creation fails
-/// * `Decryption` - If the decryption operation fails
 pub fn decrypt_data(
     in_out: &mut [u8],
-    key: &[u8],
-    algo_name: &str,
+    ctx: &PreparedKeyContext,
     iv: &[u8],
     tag: &[u8],
 ) -> Result<(), CryptoTensorsError> {
@@ -205,26 +207,7 @@ pub fn decrypt_data(
         return Ok(());
     }
 
-    // Validate inputs
-    let algo = algo_name
-        .parse::<EncryptionAlgorithm>()
-        .map_err(|_| CryptoTensorsError::InvalidAlgorithm(algo_name.to_string()))?;
-
-    if key.is_empty() {
-        return Err(CryptoTensorsError::InvalidKeyLength {
-            expected: algo.key_len(),
-            actual: 0,
-        });
-    }
-
-    if key.len() != algo.key_len() {
-        return Err(CryptoTensorsError::InvalidKeyLength {
-            expected: algo.key_len(),
-            actual: key.len(),
-        });
-    }
-
-    let aead_algo = algo.get_aead_algo();
+    let aead_algo = ctx.algo.get_aead_algo();
     if iv.is_empty() || tag.is_empty() {
         return Err(CryptoTensorsError::InvalidIvLength {
             expected: aead_algo.nonce_len(),
@@ -232,10 +215,7 @@ pub fn decrypt_data(
         });
     }
 
-    let key = aead::UnboundKey::new(aead_algo, key)
-        .map_err(|e| CryptoTensorsError::KeyCreation(e.to_string()))?;
-    let key = aead::LessSafeKey::new(key);
-
+    // Length checks should be extremely fast, no allocation
     let nonce = aead::Nonce::try_assume_unique_for_key(iv).map_err(|_e| {
         CryptoTensorsError::InvalidIvLength {
             expected: aead_algo.nonce_len(),
@@ -244,15 +224,18 @@ pub fn decrypt_data(
     })?;
 
     // Create tag using algorithm-specific method
-    let tag = algo
+    // Only length check and copying into the array, extremely fast
+    let tag = ctx
+        .algo
         .create_tag(tag)
         .map_err(|_e| CryptoTensorsError::InvalidTagLength {
-            expected: algo.tag_len(),
+            expected: ctx.algo.tag_len(),
             actual: tag.len(),
         })?;
 
     // Decrypt in place using separate tag
-    key.open_in_place_separate_tag(nonce, aead::Aad::empty(), tag, in_out, 0..)
+    ctx.key
+        .open_in_place_separate_tag(nonce, aead::Aad::empty(), tag, in_out, 0..)
         .map_err(|e| CryptoTensorsError::Decryption(e.to_string()))?;
 
     Ok(())

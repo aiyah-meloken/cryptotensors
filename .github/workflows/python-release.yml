@@ -49,7 +49,7 @@ jobs:
           CFLAGS_armv7_unknown_linux_gnueabihf: '-D__ARM_ARCH=7'
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --manifest-path bindings/python/Cargo.toml --features legacy
+          args: --release --out dist --manifest-path bindings/python/Cargo.toml --no-default-features --features legacy
           sccache: 'true'
           manylinux: auto
       - name: Build modern wheels

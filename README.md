@@ -155,13 +155,13 @@ The file format is the same as the safetensors format, with the following additi
 ### Notes & Benefits
 
 - Two stages of encryption: the entire header is encrypted using the master decryption key, and the tensor data is encrypted using the per-tensor encryption keys.
-
-  on-demand when accessed, maintaining the benefits of lazy loading while ensuring security.
-  This allows loading large encrypted models without decrypting all tensors upfront, preserving
-  memory efficiency and supporting distributed settings where only specific tensors are needed.
-
-- **Zero-copy**: Access encrypted data without copying using `mmap`.
-  - *Note: Zero-copy support is disabled on PyPy due to C-API constraints.*
+- **Lazy decryption**: Encrypted tensors are decrypted on-demand when accessed, maintaining the
+  benefits of lazy loading while ensuring security. This allows loading large encrypted models
+  without decrypting all tensors upfront, preserving memory efficiency and supporting distributed
+  settings where only specific tensors are needed.
+- **Zero-copy buffer passing**: Decrypted tensor data is exposed to Python via the buffer protocol,
+  allowing frameworks like PyTorch and NumPy to reference the memory directly without an extra copy.
+  - *Note: Zero-copy buffer protocol support requires Python 3.11+ and is disabled on PyPy due to C-API constraints.*
 - **Python Support**: Supports 3.11, 3.12, and 3.13.
   - *Note: Python 3.14 (preview) is not yet supported due to upstream dependency constraints.*
 

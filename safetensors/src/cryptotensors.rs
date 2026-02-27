@@ -524,7 +524,7 @@ impl SingleCryptor {
             .get_or_try_init(|| {
                 let data_key = Zeroizing::new(self.unwrap_key()?);
 
-                // Read directly from file via pread (Unix) or seek+read (Windows)
+                // Atomic positioned read: pread (Unix) / seek_read (Windows)
                 let mut buffer = vec![0u8; len];
                 #[cfg(unix)]
                 {
@@ -533,10 +533,30 @@ impl SingleCryptor {
                         CryptoTensorsError::Decryption(format!("pread failed: {}", e))
                     })?;
                 }
-                #[cfg(not(unix))]
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::FileExt;
+                    let mut bytes_read = 0;
+                    while bytes_read < buffer.len() {
+                        let n = file
+                            .seek_read(&mut buffer[bytes_read..], file_offset + bytes_read as u64)
+                            .map_err(|e| {
+                                CryptoTensorsError::Decryption(format!("seek_read failed: {}", e))
+                            })?;
+                        if n == 0 {
+                            return Err(CryptoTensorsError::Decryption(
+                                "seek_read: unexpected EOF".to_string(),
+                            ));
+                        }
+                        bytes_read += n;
+                    }
+                }
+                #[cfg(not(any(unix, windows)))]
                 {
                     use std::io::{Read, Seek, SeekFrom};
-                    let mut file = file;
+                    let mut file = file.try_clone().map_err(|e| {
+                        CryptoTensorsError::Decryption(format!("file clone failed: {}", e))
+                    })?;
                     file.seek(SeekFrom::Start(file_offset)).map_err(|e| {
                         CryptoTensorsError::Decryption(format!("seek failed: {}", e))
                     })?;

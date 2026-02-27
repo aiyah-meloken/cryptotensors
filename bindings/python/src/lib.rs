@@ -246,7 +246,7 @@ impl DecryptedBuffer {
         pyo3::ffi::Py_IncRef(ptr);
         (*view).obj = ptr;
         Ok(())
-    } 
+    }
 
     /// Release buffer info for Python buffer protocol (Python 3.11+ stable ABI)
     ///
@@ -2065,7 +2065,9 @@ impl PySafeSlice {
                         }
                         #[cfg(not(feature = "modern"))]
                         {
-                            PyByteArray::new(py, arc_data.as_ref().as_slice()).into_any().into()
+                            PyByteArray::new(py, arc_data.as_ref().as_slice())
+                                .into_any()
+                                .into()
                         }
                     } else {
                         return Err(SafetensorError::new_err("Decrypted buffer not found"));

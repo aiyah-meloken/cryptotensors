@@ -342,7 +342,7 @@ enum DeserializeKeyKind {
 
 /// Information about encrypted tensor data and methods for encryption/decryption
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SingleCryptor<'data> {
+pub struct SingleCryptor {
     /// Algorithm used for encryption
     #[serde(skip)]
     enc_algo: String,
@@ -361,18 +361,15 @@ pub struct SingleCryptor<'data> {
     /// Authentication tag for data encryption encoded in base64
     #[serde(with = "cryptor_serde")]
     tag: OnceCell<String>,
-    /// Buffer for decrypted data
+    /// Buffer for decrypted data (Arc for zero-copy sharing with Python)
     #[serde(skip)]
-    buffer: OnceCell<Vec<u8>>,
+    buffer: OnceCell<Arc<Vec<u8>>>,
     /// Master key for key encryption/decryption
     #[serde(skip)]
     master_key: Arc<[u8]>,
-    /// Phantom data for lifetime tracking
-    #[serde(skip)]
-    _phantom: std::marker::PhantomData<&'data ()>,
 }
 
-impl<'data> SingleCryptor<'data> {
+impl SingleCryptor {
     /// Create a new SingleCryptor from key material
     ///
     /// # Arguments
@@ -399,7 +396,6 @@ impl<'data> SingleCryptor<'data> {
             tag: OnceCell::new(),
             buffer: OnceCell::new(),
             master_key: Arc::from(master_key),
-            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -503,22 +499,100 @@ impl<'data> SingleCryptor<'data> {
         Ok(data_key)
     }
 
-    /// Decrypt data using the master key
+    /// Decrypt data by reading directly from the file via pread.
+    ///
+    /// Uses a single pread syscall to read encrypted data into a pre-allocated
+    /// buffer, then decrypts in-place. This bypasses mmap page fault overhead.
     ///
     /// # Arguments
     ///
-    /// * `data` - The encrypted data to decrypt
+    /// * `file` - The file to read from
+    /// * `file_offset` - The byte offset in the file where the encrypted data starts
+    /// * `len` - The number of bytes to read and decrypt
     ///
     /// # Returns
     ///
     /// * `Ok(&[u8])` - A reference to the decrypted data
-    /// * `Err(CryptoTensorsError)` - If decryption fails
+    /// * `Err(CryptoTensorsError)` - If reading or decryption fails
+    fn decrypt_from_file(
+        &self,
+        file: &std::fs::File,
+        file_offset: u64,
+        len: usize,
+    ) -> Result<&[u8], CryptoTensorsError> {
+        self.buffer
+            .get_or_try_init(|| {
+                let data_key = Zeroizing::new(self.unwrap_key()?);
+
+                // Atomic positioned read: pread (Unix) / seek_read (Windows)
+                let mut buffer = vec![0u8; len];
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::FileExt;
+                    file.read_exact_at(&mut buffer, file_offset).map_err(|e| {
+                        CryptoTensorsError::Decryption(format!("pread failed: {}", e))
+                    })?;
+                }
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::FileExt;
+                    let mut bytes_read = 0;
+                    while bytes_read < buffer.len() {
+                        let n = file
+                            .seek_read(&mut buffer[bytes_read..], file_offset + bytes_read as u64)
+                            .map_err(|e| {
+                                CryptoTensorsError::Decryption(format!("seek_read failed: {}", e))
+                            })?;
+                        if n == 0 {
+                            return Err(CryptoTensorsError::Decryption(
+                                "seek_read: unexpected EOF".to_string(),
+                            ));
+                        }
+                        bytes_read += n;
+                    }
+                }
+                #[cfg(not(any(unix, windows)))]
+                {
+                    use std::io::{Read, Seek, SeekFrom};
+                    let mut file = file.try_clone().map_err(|e| {
+                        CryptoTensorsError::Decryption(format!("file clone failed: {}", e))
+                    })?;
+                    file.seek(SeekFrom::Start(file_offset)).map_err(|e| {
+                        CryptoTensorsError::Decryption(format!("seek failed: {}", e))
+                    })?;
+                    file.read_exact(&mut buffer).map_err(|e| {
+                        CryptoTensorsError::Decryption(format!("read failed: {}", e))
+                    })?;
+                }
+
+                decrypt_data(
+                    &mut buffer,
+                    data_key.as_slice(),
+                    &self.enc_algo,
+                    BASE64
+                        .decode(self.iv.get().ok_or_else(|| {
+                            CryptoTensorsError::KeyUnwrap("iv is empty".to_string())
+                        })?)
+                        .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
+                        .as_slice(),
+                    BASE64
+                        .decode(self.tag.get().ok_or_else(|| {
+                            CryptoTensorsError::KeyUnwrap("tag is empty".to_string())
+                        })?)
+                        .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
+                        .as_slice(),
+                )?;
+
+                Ok(Arc::new(buffer))
+            })
+            .map(|arc_ref| arc_ref.as_slice())
+    }
+
+    /// Decrypt data from an in-memory buffer.
     ///
-    /// # Errors
-    ///
-    /// * `KeyUnwrap` - If key unwrapping fails
-    /// * `Decryption` - If data decryption fails
-    fn decrypt(&'data self, data: &[u8]) -> Result<&'data [u8], CryptoTensorsError> {
+    /// This copies the data from the provided slice and decrypts in-place.
+    /// Used by both the Rust crate API and Python bindings (when data is already in memory).
+    fn decrypt(&self, data: &[u8]) -> Result<&[u8], CryptoTensorsError> {
         self.buffer
             .get_or_try_init(|| {
                 let data_key = Zeroizing::new(self.unwrap_key()?);
@@ -542,9 +616,9 @@ impl<'data> SingleCryptor<'data> {
                         .as_slice(),
                 )?;
 
-                Ok(buffer)
+                Ok(Arc::new(buffer))
             })
-            .map(|vec_ref| vec_ref.as_slice())
+            .map(|arc_ref| arc_ref.as_slice())
     }
 
     /// Encrypt data using the master key
@@ -577,7 +651,7 @@ impl<'data> SingleCryptor<'data> {
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set tag".to_string()))?;
         self.wrap_key(&data_key)?;
         self.buffer
-            .set(buffer)
+            .set(Arc::new(buffer))
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set buffer".to_string()))?;
         Ok(())
     }
@@ -652,7 +726,6 @@ impl<'data> SingleCryptor<'data> {
             tag: self.tag.clone(),   // Preserve data encryption tag (if set)
             buffer: OnceCell::new(), // Clear buffer (master_key changed)
             master_key: new_master_key,
-            _phantom: std::marker::PhantomData,
         };
 
         // If re-wrapped, set new encrypted fields
@@ -675,7 +748,7 @@ impl<'data> SingleCryptor<'data> {
     }
 }
 
-impl<'data> Clone for SingleCryptor<'data> {
+impl Clone for SingleCryptor {
     fn clone(&self) -> Self {
         Self {
             enc_algo: self.enc_algo.clone(),
@@ -686,7 +759,6 @@ impl<'data> Clone for SingleCryptor<'data> {
             tag: self.tag.clone(),
             buffer: self.buffer.clone(),
             master_key: self.master_key.clone(),
-            _phantom: self._phantom,
         }
     }
 }
@@ -781,9 +853,9 @@ impl HeaderSigner {
 
 /// Manager for handling encryption and decryption of multiple tensors
 #[derive(Debug)]
-pub struct CryptoTensors<'data> {
+pub struct CryptoTensors {
     /// Mapping from tensor names to their encryptors
-    cryptors: HashMap<String, SingleCryptor<'data>>,
+    cryptors: HashMap<String, SingleCryptor>,
     /// Signer for signing/verifying the file header
     signer: HeaderSigner,
     /// Key material for encryption/decryption
@@ -796,9 +868,9 @@ pub struct CryptoTensors<'data> {
     version: String,
 }
 
-impl<'data> CryptoTensors<'data> {
+impl CryptoTensors {
     /// Get the encryptor for a specific tensor
-    pub fn get(&self, tensor_name: &str) -> Option<&SingleCryptor<'data>> {
+    pub fn get(&self, tensor_name: &str) -> Option<&SingleCryptor> {
         self.cryptors.get(tensor_name)
     }
 
@@ -861,7 +933,7 @@ impl<'data> CryptoTensors<'data> {
                 let cryptor = SingleCryptor::new(&enc_key)?;
                 Ok((name.clone(), cryptor))
             })
-            .collect::<Result<HashMap<String, SingleCryptor<'data>>, CryptoTensorsError>>()?;
+            .collect::<Result<HashMap<String, SingleCryptor>, CryptoTensorsError>>()?;
 
         // Create signer
         let signer = HeaderSigner::new(&sign_key)?;
@@ -1183,9 +1255,8 @@ impl<'data> CryptoTensors<'data> {
         }
         let master_key: Arc<[u8]> = Arc::from(enc_key.get_master_key_bytes()?);
 
-        let mut cryptors: HashMap<String, SingleCryptor<'data>> =
-            serde_json::from_str(encryption_info)
-                .map_err(|e| CryptoTensorsError::Encryption(e.to_string()))?;
+        let mut cryptors: HashMap<String, SingleCryptor> = serde_json::from_str(encryption_info)
+            .map_err(|e| CryptoTensorsError::Encryption(e.to_string()))?;
         for cryptor in cryptors.values_mut() {
             cryptor.master_key = master_key.clone();
             cryptor.enc_algo = enc_key.alg.clone();
@@ -1201,27 +1272,43 @@ impl<'data> CryptoTensors<'data> {
         }))
     }
 
-    /// Silently decrypt data for a tensor
+    /// Silently decrypt data for a tensor by reading directly from file.
     ///
-    /// If no encryptor exists for the tensor, returns the original data unchanged.
+    /// If no encryptor exists for the tensor, does nothing and returns Ok(()).
     ///
     /// # Arguments
     ///
     /// * `tensor_name` - The name of the tensor
-    /// * `data` - The encrypted data to decrypt
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(&[u8])` - The decrypted data, or the original data if no encryptor exists
-    /// * `Err(CryptoTensorsError)` - If decryption fails
-    pub fn silent_decrypt(
-        &'data self,
+    /// * `file` - The file to read from
+    /// * `file_offset` - The byte offset in the file where the encrypted data starts
+    /// * `len` - The number of bytes to read and decrypt
+    pub fn silent_decrypt_from_file(
+        &self,
         tensor_name: &str,
-        data: &'data [u8],
-    ) -> Result<&'data [u8], CryptoTensorsError> {
+        file: &std::fs::File,
+        file_offset: u64,
+        len: usize,
+    ) -> Result<(), CryptoTensorsError> {
+        match self.get(tensor_name) {
+            Some(cryptor) => {
+                cryptor.decrypt_from_file(file, file_offset, len)?;
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// Silently decrypt data for a tensor from an in-memory buffer.
+    ///
+    /// If no encryptor exists for the tensor, returns the original data unchanged.
+    pub fn silent_decrypt<'a>(
+        &'a self,
+        tensor_name: &str,
+        data: &'a [u8],
+    ) -> Result<&'a [u8], CryptoTensorsError> {
         match self.get(tensor_name) {
             Some(cryptor) => cryptor.decrypt(data),
-            None => Ok(data), // Return original data if no cryptor is found
+            None => Ok(data),
         }
     }
 
@@ -1251,7 +1338,10 @@ impl<'data> CryptoTensors<'data> {
         }
     }
 
-    /// Get encrypted data for a specific tensor
+    /// Get decrypted buffer as Arc for zero-copy sharing
+    ///
+    /// Returns the cached decrypted data if available. Use `silent_decrypt` first
+    /// to populate the cache.
     ///
     /// # Arguments
     ///
@@ -1259,11 +1349,11 @@ impl<'data> CryptoTensors<'data> {
     ///
     /// # Returns
     ///
-    /// * `Some(&[u8])` - The encrypted data if available
-    /// * `None` - If no encrypted data is available
-    pub fn get_buffer(&self, tensor_name: &str) -> Option<&[u8]> {
+    /// * `Some(Arc<Vec<u8>>)` - The decrypted data Arc if available
+    /// * `None` - If no decrypted data is available
+    pub fn get_buffer(&self, tensor_name: &str) -> Option<Arc<Vec<u8>>> {
         match self.get(tensor_name) {
-            Some(cryptor) => cryptor.buffer.get().map(|buf| buf.as_slice()),
+            Some(cryptor) => cryptor.buffer.get().cloned(),
             None => None,
         }
     }

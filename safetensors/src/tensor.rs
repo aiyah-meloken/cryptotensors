@@ -234,12 +234,7 @@ pub trait View {
 }
 
 /// Result type for prepare function
-type PrepareResult<'data, V> = (
-    PreparedData,
-    Vec<V>,
-    Option<CryptoTensors<'data>>,
-    Vec<String>,
-);
+type PrepareResult<'data, V> = (PreparedData, Vec<V>, Option<CryptoTensors>, Vec<String>);
 
 fn prepare<'data, S, V, I>(
     data: I,
@@ -363,7 +358,7 @@ pub fn serialize<
         // Use encrypted data if available, otherwise use original data
         if let Some(ref c) = crypto {
             if let Some(encrypted_data) = c.get_buffer(name) {
-                buffer.extend(encrypted_data);
+                buffer.extend(encrypted_data.as_slice());
                 continue;
             }
         }
@@ -415,7 +410,7 @@ where
         // Use encrypted data if available, otherwise use original data
         if let Some(ref c) = crypto {
             if let Some(encrypted_data) = c.get_buffer(name) {
-                f.write_all(encrypted_data)?;
+                f.write_all(encrypted_data.as_slice())?;
                 continue;
             }
         }
@@ -591,7 +586,7 @@ pub struct SafeTensors<'data> {
     metadata: Metadata,
     data: &'data [u8],
     /// CryptoTensors: Optional encryption information for transparent decryption
-    crypto: Option<CryptoTensors<'data>>,
+    crypto: Option<CryptoTensors>,
 }
 
 impl<'data> SafeTensors<'data> {

@@ -486,6 +486,7 @@ def _tobytes(tensor: torch.Tensor, name: str) -> bytes:
         return b""
     newptr = ctypes.cast(ptr, ctypes.POINTER(ctypes.c_ubyte))
     data = np.ctypeslib.as_array(newptr, (total_bytes,))  # no internal copy
+
     if sys.byteorder == "big":
         NPDTYPES = {
             torch.int64: np.int64,

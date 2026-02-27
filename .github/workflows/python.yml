@@ -15,7 +15,13 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         # Lowest and highest, no version specified so that 
         # new releases get automatically tested against
-        version: [{torch: torch==1.10, python: "3.9", arch: "x64", numpy: numpy==1.26.4}, {torch: torch, python: "3.12", arch: "x64", numpy: numpy}]
+        version: 
+          # Legacy Support (From Main)
+          - {torch: torch==1.10, python: "3.9", arch: "x64", numpy: numpy==1.26.4}
+          # Modern Support (From Main)
+          - {torch: torch, python: "3.12", arch: "x64", numpy: numpy}
+          # Windows Stability Fix (New)
+          - {torch: torch==2.5.1, python: "3.11", arch: "x64", numpy: numpy}
           # TODO this would include macos ARM target.
           # however jax has an illegal instruction issue
           # that exists only in CI (probably difference in instruction support).
@@ -33,9 +39,9 @@ jobs:
               arch: "x64-freethreaded"
           - os: macos-15-intel
             version:
-              torch: torch==1.10
-              numpy: "numpy==1.26"
-              python: "3.9"
+              torch: torch
+              numpy: numpy
+              python: "3.11"
               arch: "x64"
           - os: macos-latest
             version:
@@ -72,6 +78,19 @@ jobs:
           python-version: ${{ matrix.version.python }}
           architecture: ${{ matrix.version.arch }}
 
+      - name: Set Cargo features for Python version
+        shell: bash
+        run: |
+          PYTHON_MINOR=$(python -c "import sys; print(sys.version_info.minor)")
+          if [ "$PYTHON_MINOR" -lt 11 ]; then
+            echo "Python < 3.11 detected, using legacy ABI"
+            echo "MATURIN_PEP517_ARGS=--no-default-features --features legacy" >> $GITHUB_ENV
+            echo "CARGO_FEATURE_ARGS=--no-default-features --features legacy" >> $GITHUB_ENV
+          else
+            echo "Python >= 3.11, using modern ABI (default)"
+            echo "CARGO_FEATURE_ARGS=" >> $GITHUB_ENV
+          fi
+
       - name: Lint with RustFmt
         run: cargo fmt -- --check
 
@@ -88,6 +107,7 @@ jobs:
       - name: Install (torch)
         if: matrix.version.arch != 'x64-freethreaded'
         run: |
+          pip install "setuptools<82"
           pip install ${{ matrix.version.numpy }}
           pip install ${{ matrix.version.torch }}
         shell: bash
@@ -132,15 +152,16 @@ jobs:
       - name: Run tests
         if: matrix.version.arch != 'x64-freethreaded'
         run: |
-          cargo test
+          cargo test ${{ env.CARGO_FEATURE_ARGS }}
           pip install ".[testing]"
           pip install ../compatible
+          pip install "setuptools<82"
           pytest -sv tests/
 
       - name: Run tests (freethreaded)
         if: matrix.version.arch == 'x64-freethreaded'
         run: |
-          cargo test
+          cargo test ${{ env.CARGO_FEATURE_ARGS }}
           pip install ".[testingfree]"
           pip install pytest numpy
           pip install ../compatible

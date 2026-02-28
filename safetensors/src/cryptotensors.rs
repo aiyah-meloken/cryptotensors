@@ -635,6 +635,7 @@ impl SingleCryptor {
                     CryptoTensorsError::Decryption("Context not prepared".to_string())
                 })?;
 
+                #[allow(unused_variables)]
                 let get_strategy = || -> String {
                     std::env::var("CRYPTOTENSORS_PREAD_STRATEGY")
                         .unwrap_or_else(|_| "B".to_string())

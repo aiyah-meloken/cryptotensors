@@ -16,9 +16,12 @@ use once_cell::sync::OnceCell;
 use rayon::prelude::*;
 use ring::rand::{self, SecureRandom};
 use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 // ============================================================================
 // Version Constants
@@ -371,22 +374,32 @@ pub struct SingleCryptor {
     /// Buffer for decrypted data (Arc for zero-copy sharing with Python)
     #[serde(skip)]
     buffer: OnceCell<Arc<Vec<u8>>>,
-    /// Prepared context for decryption. Initialized during header load or after wrapping.
+    /// Prepared crypto context. Initialized during header load or after encryption.
     #[serde(skip)]
-    ctx: OnceCell<Arc<DecryptionContext>>,
+    ctx: OnceCell<Arc<CryptoContext>>,
 }
 
 /// Pre-allocated contexts for swift decryption without repeating base64 parses or keystream derivations
-#[derive(Clone, Debug)]
-pub struct DecryptionContext {
+pub(crate) struct CryptoContext {
     /// Prepared key context for data decryption
-    pub data_key_ctx: PreparedKeyContext,
+    pub(crate) data_key_ctx: PreparedKeyContext,
     /// Initialization vector bytes
-    pub iv: Vec<u8>,
+    pub(crate) iv: Vec<u8>,
     /// Authentication tag bytes
-    pub tag: Vec<u8>,
-    /// Unencrypted data key bytes
-    pub data_key: Vec<u8>,
+    pub(crate) tag: Vec<u8>,
+    /// Plaintext DEK — stored in a Zeroizing wrapper so the buffer is wiped on drop
+    pub(crate) data_key: Zeroizing<Vec<u8>>,
+}
+
+impl fmt::Debug for CryptoContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CryptoContext")
+            .field("data_key_ctx", &self.data_key_ctx)
+            .field("iv", &self.iv)
+            .field("tag", &self.tag)
+            .field("data_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl SingleCryptor {
@@ -505,12 +518,13 @@ impl SingleCryptor {
             )
             .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
 
-        let mut data_key =
+        let mut data_key = Zeroizing::new(
             BASE64
                 .decode(self.wrapped_key.get().ok_or_else(|| {
                     CryptoTensorsError::KeyUnwrap("wrapped_key is empty".to_string())
                 })?)
-                .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
+                .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?,
+        );
 
         let key_iv = BASE64
             .decode(
@@ -533,14 +547,14 @@ impl SingleCryptor {
         let data_key_ctx = prepare_key_context(&data_key, &self.enc_algo)?;
 
         self.ctx
-            .set(Arc::new(DecryptionContext {
+            .set(Arc::new(CryptoContext {
                 data_key_ctx,
                 iv,
                 tag,
                 data_key,
             }))
             .map_err(|_| {
-                CryptoTensorsError::Decryption("Failed to set DecryptionContext".to_string())
+                CryptoTensorsError::Decryption("Failed to set CryptoContext".to_string())
             })?;
 
         Ok(())
@@ -671,12 +685,9 @@ impl SingleCryptor {
         data: &[u8],
         master_key_ctx: &PreparedKeyContext,
     ) -> Result<(), CryptoTensorsError> {
-        // Generate random data encryption key
-        let data_key = self.random_key()?;
-
+        let data_key = Zeroizing::new(self.random_key()?);
         let data_key_ctx = prepare_key_context(&data_key, &self.enc_algo)?;
 
-        // Copy data to buffer, prepare in-place encryption
         let mut buffer = data.to_vec();
         let (iv, tag) = encrypt_data(&mut buffer, &data_key_ctx)?;
         self.iv
@@ -691,14 +702,14 @@ impl SingleCryptor {
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set buffer".to_string()))?;
 
         self.ctx
-            .set(Arc::new(DecryptionContext {
+            .set(Arc::new(CryptoContext {
                 data_key_ctx,
                 iv,
                 tag,
                 data_key,
             }))
             .map_err(|_| {
-                CryptoTensorsError::Decryption("Failed to set DecryptionContext".to_string())
+                CryptoTensorsError::Encryption("Failed to set CryptoContext".to_string())
             })?;
 
         Ok(())
@@ -735,13 +746,13 @@ impl SingleCryptor {
             )));
         }
 
-        let new_master_key = new_key.get_master_key_bytes()?;
+        let new_master_key = Zeroizing::new(new_key.get_master_key_bytes()?);
         let new_master_key_ctx = prepare_key_context(&new_master_key, &self.enc_algo)?;
 
         // Check if wrapped_key exists (needs re-wrapping)
         let (new_wrapped_key, new_key_iv, new_key_tag) = if self.wrapped_key.get().is_some() {
             // Case 1: wrapped_key exists, need to re-wrap
-            // We assume DecryptionContext is prepared.
+            // We assume CryptoContext is prepared.
             let ctx_arc = self.ctx.get().ok_or_else(|| {
                 CryptoTensorsError::Decryption(
                     "Context not prepared, unable to rewrap key".to_string(),
@@ -974,7 +985,6 @@ impl CryptoTensors {
             return Ok(None);
         }
 
-        // Create cryptor for each tensor
         let cryptors = matched_tensors
             .iter()
             .map(|name| {
@@ -1301,7 +1311,7 @@ impl CryptoTensors {
                 ));
             }
         }
-        let master_key = enc_key.get_master_key_bytes()?;
+        let master_key = Zeroizing::new(enc_key.get_master_key_bytes()?);
         let master_key_ctx = prepare_key_context(&master_key, &enc_key.alg)?;
 
         let mut cryptors: HashMap<String, SingleCryptor> = serde_json::from_str(encryption_info)
@@ -1324,7 +1334,7 @@ impl CryptoTensors {
             }
         }
 
-        // Zeroize master key by dropping Context and Raw bytes when scope ends
+        // master_key (Zeroizing<Vec<u8>>) is wiped here as it goes out of scope
 
         Ok(Some(Self {
             cryptors,
@@ -1376,34 +1386,29 @@ impl CryptoTensors {
         }
     }
 
-    /// Silently encrypt data for a tensor
+    /// Encrypt all tensors that have a matching cryptor.
     ///
-    /// If no encryptor exists for the tensor, does nothing.
-    ///
-    /// # Arguments
-    ///
-    /// * `tensor_name` - The name of the tensor
-    /// * `data` - The data to encrypt
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If encryption succeeds or no encryptor exists
-    /// * `Err(CryptoTensorsError)` - If encryption fails
-    ///
-    /// # Errors
-    ///
-    /// * `RandomGeneration` - If key generation fails
-    /// * `Encryption` - If data encryption fails
-    /// * `KeyCreation` - If key creation fails
-    pub fn silent_encrypt(&self, tensor_name: &str, data: &[u8]) -> Result<(), CryptoTensorsError> {
-        match self.get(tensor_name) {
-            Some(cryptor) => {
-                let master_key = self.enc_key.get_master_key_bytes()?;
-                let master_key_ctx = prepare_key_context(&master_key, &self.enc_key.alg)?;
-                cryptor.encrypt(data, &master_key_ctx)
-            }
-            None => Ok(()),
+    /// Iterates `self.cryptors` and calls `get_data(name)` only for tensors
+    /// that need encryption — the caller never has to know which tensors are
+    /// selected. Prepares the master-key context once, symmetric with the
+    /// deserialize path where `prepare_context` receives a shared context.
+    pub fn encrypt_tensors<'a>(
+        &self,
+        get_data: impl Fn(&str) -> Option<Cow<'a, [u8]>>,
+    ) -> Result<(), CryptoTensorsError> {
+        if self.cryptors.is_empty() {
+            return Ok(());
         }
+
+        let master_key = Zeroizing::new(self.enc_key.get_master_key_bytes()?);
+        let master_key_ctx = prepare_key_context(&master_key, &self.enc_key.alg)?;
+
+        for (name, cryptor) in &self.cryptors {
+            if let Some(data) = get_data(name) {
+                cryptor.encrypt(&data, &master_key_ctx)?;
+            }
+        }
+        Ok(())
     }
 
     /// Get decrypted buffer as Arc for zero-copy sharing

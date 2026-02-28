@@ -266,6 +266,17 @@ where
         None
     };
 
+    // Encrypt tensors that need encryption. encrypt_tensors iterates its own
+    // cryptor list and pulls data on demand — only encrypted tensors are touched.
+    if let Some(ref c) = crypto {
+        let data_by_name: HashMap<&str, &V> = data
+            .iter()
+            .map(|(name, tensor)| (name.as_ref(), tensor))
+            .collect();
+        c.encrypt_tensors(|name| data_by_name.get(name).map(|t| t.data()))?;
+    }
+
+    // Phase 2: Build metadata using encrypted buffer sizes
     let mut tensors: Vec<V> = Vec::with_capacity(data.len());
     let mut hmetadata = Vec::with_capacity(data.len());
     let mut offset = 0;
@@ -273,9 +284,7 @@ where
     for (name, tensor) in data {
         let tensor_name = name.as_ref().to_string();
 
-        // Encrypt tensor data if crypto is configured for this tensor
         let n = if let Some(ref c) = crypto {
-            c.silent_encrypt(&tensor_name, tensor.data().as_ref())?;
             c.get_buffer(&tensor_name)
                 .map(|b| b.len())
                 .unwrap_or(tensor.data_len())
@@ -2263,5 +2272,141 @@ mod tests {
         assert_eq!(t.data(), data);
 
         disable_provider("DirectKeyProvider");
+    }
+
+    #[test]
+    fn test_partial_encryption_roundtrip() {
+        use crate::key::KeyMaterial;
+
+        let enc_key =
+            KeyMaterial::new_enc_key(None, None, Some("partial-enc".to_string()), None).unwrap();
+        let sign_key =
+            KeyMaterial::new_sign_key(None, None, None, Some("partial-sign".to_string()), None)
+                .unwrap();
+
+        let data_secret: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let data_public: Vec<u8> = vec![
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+        ];
+
+        let tensor_secret = TensorView {
+            dtype: Dtype::F32,
+            shape: vec![2, 2],
+            data: &data_secret,
+        };
+        let tensor_public = TensorView {
+            dtype: Dtype::F32,
+            shape: vec![2, 2],
+            data: &data_public,
+        };
+
+        let config = SerializeCryptoConfig::with_keys(enc_key.clone(), sign_key.clone())
+            .tensor_filter(vec!["secret".to_string()]);
+
+        let buffer = serialize(
+            [("secret", tensor_secret), ("public", tensor_public)],
+            None,
+            Some(&config),
+        )
+        .unwrap();
+
+        // __encryption__ should only contain the encrypted tensor
+        let (_, metadata) = SafeTensors::read_metadata(&buffer).unwrap();
+        let meta = metadata.metadata().as_ref().unwrap();
+        let encryption_info = meta.get("__encryption__").unwrap();
+        assert!(
+            encryption_info.contains("secret"),
+            "secret should be in encryption info"
+        );
+        assert!(
+            !encryption_info.contains("public"),
+            "public should NOT be in encryption info"
+        );
+
+        // Both tensors must round-trip correctly
+        let deser_config = DeserializeCryptoConfig::with_keys(enc_key, sign_key);
+        let loaded = SafeTensors::deserialize_with_config(&buffer, Some(&deser_config)).unwrap();
+
+        let loaded_secret = loaded.tensor("secret").unwrap();
+        assert_eq!(loaded_secret.shape(), &[2, 2]);
+        assert_eq!(loaded_secret.data(), data_secret);
+
+        let loaded_public = loaded.tensor("public").unwrap();
+        assert_eq!(loaded_public.shape(), &[2, 2]);
+        assert_eq!(loaded_public.data(), data_public);
+    }
+
+    #[test]
+    fn test_partial_encryption_rewrap() {
+        use crate::key::KeyMaterial;
+
+        let old_enc_key =
+            KeyMaterial::new_enc_key(None, None, Some("old-part-enc".to_string()), None).unwrap();
+        let old_sign_key =
+            KeyMaterial::new_sign_key(None, None, None, Some("old-part-sign".to_string()), None)
+                .unwrap();
+        let new_enc_key =
+            KeyMaterial::new_enc_key(None, None, Some("new-part-enc".to_string()), None).unwrap();
+        let new_sign_key =
+            KeyMaterial::new_sign_key(None, None, None, Some("new-part-sign".to_string()), None)
+                .unwrap();
+
+        let data_secret: Vec<u8> = vec![
+            10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160,
+        ];
+        let data_public: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+
+        let tensor_secret = TensorView {
+            dtype: Dtype::F32,
+            shape: vec![2, 2],
+            data: &data_secret,
+        };
+        let tensor_public = TensorView {
+            dtype: Dtype::F32,
+            shape: vec![2, 2],
+            data: &data_public,
+        };
+
+        // Serialize with partial encryption (only "secret")
+        let old_config =
+            SerializeCryptoConfig::with_keys(old_enc_key.clone(), old_sign_key.clone())
+                .tensor_filter(vec!["secret".to_string()]);
+
+        let buffer = serialize(
+            [("secret", tensor_secret), ("public", tensor_public)],
+            None,
+            Some(&old_config),
+        )
+        .unwrap();
+
+        // Rewrap with new keys
+        let old_deser_config = DeserializeCryptoConfig::with_keys(old_enc_key, old_sign_key);
+        let new_ser_config =
+            SerializeCryptoConfig::with_keys(new_enc_key.clone(), new_sign_key.clone());
+
+        let new_buffer = rewrap(&buffer, &new_ser_config, Some(&old_deser_config)).unwrap();
+
+        // New header should reference new key
+        let (_, new_metadata) = SafeTensors::read_metadata(&new_buffer).unwrap();
+        let new_meta = new_metadata.metadata().as_ref().unwrap();
+        let crypto_keys = new_meta.get("__crypto_keys__").unwrap();
+        assert!(crypto_keys.contains("new-part-enc"));
+        assert!(!crypto_keys.contains("old-part-enc"));
+
+        // Only "secret" should be in encryption info, not "public"
+        let encryption_info = new_meta.get("__encryption__").unwrap();
+        assert!(encryption_info.contains("secret"));
+        assert!(!encryption_info.contains("public"));
+
+        // Decrypt with new keys — both tensors must be correct
+        let new_deser_config = DeserializeCryptoConfig::with_keys(new_enc_key, new_sign_key);
+        let loaded =
+            SafeTensors::deserialize_with_config(&new_buffer, Some(&new_deser_config)).unwrap();
+
+        let loaded_secret = loaded.tensor("secret").unwrap();
+        assert_eq!(loaded_secret.data(), data_secret);
+
+        let loaded_public = loaded.tensor("public").unwrap();
+        assert_eq!(loaded_public.data(), data_public);
     }
 }

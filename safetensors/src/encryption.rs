@@ -208,9 +208,15 @@ pub fn decrypt_data(
     }
 
     let aead_algo = ctx.algo.get_aead_algo();
-    if iv.is_empty() || tag.is_empty() {
+    if iv.is_empty() {
         return Err(CryptoTensorsError::InvalidIvLength {
             expected: aead_algo.nonce_len(),
+            actual: 0,
+        });
+    }
+    if tag.is_empty() {
+        return Err(CryptoTensorsError::InvalidTagLength {
+            expected: ctx.algo.tag_len(),
             actual: 0,
         });
     }

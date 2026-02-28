@@ -4,16 +4,21 @@
 // This file is part of CryptoTensors, a derivative work based on safetensors.
 // This file is NEW and was not present in the original safetensors project.
 
-use crate::encryption::{decrypt_data, encrypt_data, EncryptionAlgorithm};
+use crate::encryption::{
+    decrypt_data, encrypt_data, prepare_key_context, EncryptionAlgorithm, PreparedKeyContext,
+};
 use crate::key::{resolve_key, KeyLookupParams, KeyMaterial, KeyRole, ValidateMode};
 use crate::policy::AccessPolicy;
 use crate::signing::{sign_data, verify_signature, SignatureAlgorithm};
 use crate::tensor::{Metadata, TensorInfo};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use once_cell::sync::OnceCell;
+use rayon::prelude::*;
 use ring::rand::{self, SecureRandom};
 use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -24,6 +29,11 @@ use zeroize::Zeroizing;
 
 /// Supported CryptoTensors format version
 pub const CRYPTOTENSORS_VERSION: &str = "1";
+
+/// Minimum number of tensors required to use rayon parallel iteration for
+/// context preparation (Base64 decode, DEK unwrap, Key Schedule).
+/// Below this threshold, serial iteration avoids thread scheduling overhead.
+const PARALLEL_CONTEXT_THRESHOLD: usize = 16;
 
 // ============================================================================
 // Error Types - Organized by category using thiserror
@@ -364,9 +374,32 @@ pub struct SingleCryptor {
     /// Buffer for decrypted data (Arc for zero-copy sharing with Python)
     #[serde(skip)]
     buffer: OnceCell<Arc<Vec<u8>>>,
-    /// Master key for key encryption/decryption
+    /// Prepared crypto context. Initialized during header load or after encryption.
     #[serde(skip)]
-    master_key: Arc<[u8]>,
+    ctx: OnceCell<Arc<CryptoContext>>,
+}
+
+/// Pre-allocated contexts for swift decryption without repeating base64 parses or keystream derivations
+pub(crate) struct CryptoContext {
+    /// Prepared key context for data decryption
+    pub(crate) data_key_ctx: PreparedKeyContext,
+    /// Initialization vector bytes
+    pub(crate) iv: Vec<u8>,
+    /// Authentication tag bytes
+    pub(crate) tag: Vec<u8>,
+    /// Plaintext DEK — stored in a Zeroizing wrapper so the buffer is wiped on drop
+    pub(crate) data_key: Zeroizing<Vec<u8>>,
+}
+
+impl fmt::Debug for CryptoContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CryptoContext")
+            .field("data_key_ctx", &self.data_key_ctx)
+            .field("iv", &self.iv)
+            .field("tag", &self.tag)
+            .field("data_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl SingleCryptor {
@@ -385,7 +418,6 @@ impl SingleCryptor {
             .alg
             .parse::<EncryptionAlgorithm>()
             .map_err(|_| CryptoTensorsError::InvalidAlgorithm(key_material.alg.clone()))?;
-        let master_key = key_material.get_master_key_bytes()?;
 
         Ok(Self {
             enc_algo: alg.to_string(),
@@ -395,7 +427,7 @@ impl SingleCryptor {
             iv: OnceCell::new(),
             tag: OnceCell::new(),
             buffer: OnceCell::new(),
-            master_key: Arc::from(master_key),
+            ctx: OnceCell::new(),
         })
     }
 
@@ -437,9 +469,13 @@ impl SingleCryptor {
     /// # Errors
     ///
     /// * `Encryption` - If key encryption fails
-    fn wrap_key(&self, key: &[u8]) -> Result<(), CryptoTensorsError> {
+    fn wrap_key(
+        &self,
+        key: &[u8],
+        master_key_ctx: &PreparedKeyContext,
+    ) -> Result<(), CryptoTensorsError> {
         let mut key_buf = key.to_vec();
-        let (key_iv, key_tag) = encrypt_data(&mut key_buf, &self.master_key, &self.enc_algo)?;
+        let (key_iv, key_tag) = encrypt_data(&mut key_buf, master_key_ctx)?;
         self.wrapped_key
             .set(BASE64.encode(&key_buf))
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set wrapped key".to_string()))?;
@@ -452,51 +488,76 @@ impl SingleCryptor {
         Ok(())
     }
 
-    /// Unwrap (decrypt) a key using the master key
+    /// Prepare the decryption context by decoding Base64 fields and unwrapping the DEK.
     ///
-    /// # Returns
+    /// # Arguments
     ///
-    /// * `Ok(Vec<u8>)` - The unwrapped key
-    /// * `Err(CryptoTensorsError)` - If key unwrapping fails
-    ///
-    /// # Errors
-    ///
-    /// * `MissingMasterKey` - If the master key is not set
-    /// * `Decryption` - If key decryption fails
-    fn unwrap_key(&self) -> Result<Vec<u8>, CryptoTensorsError> {
-        // Validate master key
-        if self.master_key.is_empty() {
-            return Err(CryptoTensorsError::MissingMasterKey);
+    /// * `master_key_ctx` - The prepared key context for the master key
+    fn prepare_context(
+        &mut self,
+        master_key_ctx: &PreparedKeyContext,
+    ) -> Result<(), CryptoTensorsError> {
+        // Only run if not already prepared
+        if self.ctx.get().is_some() {
+            return Ok(());
         }
 
-        let mut data_key =
+        let iv = BASE64
+            .decode(
+                self.iv
+                    .get()
+                    .ok_or_else(|| CryptoTensorsError::KeyUnwrap("iv is empty".to_string()))?,
+            )
+            .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
+
+        let tag = BASE64
+            .decode(
+                self.tag
+                    .get()
+                    .ok_or_else(|| CryptoTensorsError::KeyUnwrap("tag is empty".to_string()))?,
+            )
+            .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
+
+        let mut data_key = Zeroizing::new(
             BASE64
                 .decode(self.wrapped_key.get().ok_or_else(|| {
                     CryptoTensorsError::KeyUnwrap("wrapped_key is empty".to_string())
                 })?)
-                .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
-        decrypt_data(
-            &mut data_key,
-            &self.master_key,
-            &self.enc_algo,
-            BASE64
-                .decode(
-                    self.key_iv.get().ok_or_else(|| {
-                        CryptoTensorsError::KeyUnwrap("key_iv is empty".to_string())
-                    })?,
-                )
-                .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
-                .as_slice(),
-            BASE64
-                .decode(
-                    self.key_tag.get().ok_or_else(|| {
-                        CryptoTensorsError::KeyUnwrap("key_tag is empty".to_string())
-                    })?,
-                )
-                .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
-                .as_slice(),
-        )?;
-        Ok(data_key)
+                .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?,
+        );
+
+        let key_iv = BASE64
+            .decode(
+                self.key_iv
+                    .get()
+                    .ok_or_else(|| CryptoTensorsError::KeyUnwrap("key_iv is empty".to_string()))?,
+            )
+            .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
+
+        let key_tag = BASE64
+            .decode(
+                self.key_tag
+                    .get()
+                    .ok_or_else(|| CryptoTensorsError::KeyUnwrap("key_tag is empty".to_string()))?,
+            )
+            .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
+
+        decrypt_data(&mut data_key, master_key_ctx, &key_iv, &key_tag)?;
+
+        let data_key_ctx = prepare_key_context(&data_key, &self.enc_algo)?;
+
+        self.ctx
+            .set(Arc::new(CryptoContext {
+                data_key_ctx,
+                iv,
+                tag,
+                data_key,
+            }))
+            .map_err(|_| {
+                CryptoTensorsError::Decryption("Failed to set CryptoContext".to_string())
+            })?;
+
+        Ok(())
     }
 
     /// Decrypt data by reading directly from the file via pread.
@@ -522,7 +583,9 @@ impl SingleCryptor {
     ) -> Result<&[u8], CryptoTensorsError> {
         self.buffer
             .get_or_try_init(|| {
-                let data_key = Zeroizing::new(self.unwrap_key()?);
+                let ctx_arc = self.ctx.get().ok_or_else(|| {
+                    CryptoTensorsError::Decryption("Context not prepared".to_string())
+                })?;
 
                 // Atomic positioned read: pread (Unix) / seek_read (Windows)
                 let mut buffer = vec![0u8; len];
@@ -567,20 +630,9 @@ impl SingleCryptor {
 
                 decrypt_data(
                     &mut buffer,
-                    data_key.as_slice(),
-                    &self.enc_algo,
-                    BASE64
-                        .decode(self.iv.get().ok_or_else(|| {
-                            CryptoTensorsError::KeyUnwrap("iv is empty".to_string())
-                        })?)
-                        .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
-                        .as_slice(),
-                    BASE64
-                        .decode(self.tag.get().ok_or_else(|| {
-                            CryptoTensorsError::KeyUnwrap("tag is empty".to_string())
-                        })?)
-                        .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
-                        .as_slice(),
+                    &ctx_arc.data_key_ctx,
+                    &ctx_arc.iv,
+                    &ctx_arc.tag,
                 )?;
 
                 Ok(Arc::new(buffer))
@@ -595,25 +647,16 @@ impl SingleCryptor {
     fn decrypt(&self, data: &[u8]) -> Result<&[u8], CryptoTensorsError> {
         self.buffer
             .get_or_try_init(|| {
-                let data_key = Zeroizing::new(self.unwrap_key()?);
+                let ctx_arc = self.ctx.get().ok_or_else(|| {
+                    CryptoTensorsError::Decryption("Context not prepared".to_string())
+                })?;
 
                 let mut buffer = data.to_vec();
                 decrypt_data(
                     &mut buffer,
-                    data_key.as_slice(),
-                    &self.enc_algo,
-                    BASE64
-                        .decode(self.iv.get().ok_or_else(|| {
-                            CryptoTensorsError::KeyUnwrap("iv is empty".to_string())
-                        })?)
-                        .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
-                        .as_slice(),
-                    BASE64
-                        .decode(self.tag.get().ok_or_else(|| {
-                            CryptoTensorsError::KeyUnwrap("tag is empty".to_string())
-                        })?)
-                        .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?
-                        .as_slice(),
+                    &ctx_arc.data_key_ctx,
+                    &ctx_arc.iv,
+                    &ctx_arc.tag,
                 )?;
 
                 Ok(Arc::new(buffer))
@@ -637,22 +680,38 @@ impl SingleCryptor {
     /// * `RandomGeneration` - If key generation fails
     /// * `Encryption` - If data encryption fails
     /// * `KeyCreation` - If key creation fails
-    fn encrypt(&self, data: &[u8]) -> Result<(), CryptoTensorsError> {
-        // Generate random data encryption key
+    fn encrypt(
+        &self,
+        data: &[u8],
+        master_key_ctx: &PreparedKeyContext,
+    ) -> Result<(), CryptoTensorsError> {
         let data_key = Zeroizing::new(self.random_key()?);
-        // Copy data to buffer, prepare in-place encryption
+        let data_key_ctx = prepare_key_context(&data_key, &self.enc_algo)?;
+
         let mut buffer = data.to_vec();
-        let (iv, tag) = encrypt_data(&mut buffer, &data_key, &self.enc_algo)?;
+        let (iv, tag) = encrypt_data(&mut buffer, &data_key_ctx)?;
         self.iv
             .set(BASE64.encode(&iv))
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set iv".to_string()))?;
         self.tag
             .set(BASE64.encode(&tag))
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set tag".to_string()))?;
-        self.wrap_key(&data_key)?;
+        self.wrap_key(&data_key, master_key_ctx)?;
         self.buffer
             .set(Arc::new(buffer))
             .map_err(|_| CryptoTensorsError::Encryption("Failed to set buffer".to_string()))?;
+
+        self.ctx
+            .set(Arc::new(CryptoContext {
+                data_key_ctx,
+                iv,
+                tag,
+                data_key,
+            }))
+            .map_err(|_| {
+                CryptoTensorsError::Encryption("Failed to set CryptoContext".to_string())
+            })?;
+
         Ok(())
     }
 
@@ -687,23 +746,23 @@ impl SingleCryptor {
             )));
         }
 
-        // Get new master key
-        let new_master_key = new_key.get_master_key_bytes()?;
-        let new_master_key = Arc::from(new_master_key);
+        let new_master_key = Zeroizing::new(new_key.get_master_key_bytes()?);
+        let new_master_key_ctx = prepare_key_context(&new_master_key, &self.enc_algo)?;
 
         // Check if wrapped_key exists (needs re-wrapping)
         let (new_wrapped_key, new_key_iv, new_key_tag) = if self.wrapped_key.get().is_some() {
             // Case 1: wrapped_key exists, need to re-wrap
-            // 1.1 Validate current master key exists
-            if self.master_key.is_empty() {
-                return Err(CryptoTensorsError::MissingMasterKey);
-            }
+            // We assume CryptoContext is prepared.
+            let ctx_arc = self.ctx.get().ok_or_else(|| {
+                CryptoTensorsError::Decryption(
+                    "Context not prepared, unable to rewrap key".to_string(),
+                )
+            })?;
 
-            // 1.2 Unwrap DEK with current master key
-            let mut dek = self.unwrap_key()?;
+            let mut dek = ctx_arc.data_key.clone();
 
-            // 1.3 Re-wrap DEK with new master key
-            let (key_iv, key_tag) = encrypt_data(&mut dek, &new_master_key, &self.enc_algo)?;
+            // 1.3 Re-wrap DEK with new master key context
+            let (key_iv, key_tag) = encrypt_data(&mut dek, &new_master_key_ctx)?;
 
             // Return new encrypted values
             (
@@ -725,7 +784,7 @@ impl SingleCryptor {
             iv: self.iv.clone(),     // Preserve data encryption IV (if set)
             tag: self.tag.clone(),   // Preserve data encryption tag (if set)
             buffer: OnceCell::new(), // Clear buffer (master_key changed)
-            master_key: new_master_key,
+            ctx: self.ctx.clone(), // Preserve prepared context, it's valid regardless of master key
         };
 
         // If re-wrapped, set new encrypted fields
@@ -758,7 +817,7 @@ impl Clone for SingleCryptor {
             iv: self.iv.clone(),
             tag: self.tag.clone(),
             buffer: self.buffer.clone(),
-            master_key: self.master_key.clone(),
+            ctx: self.ctx.clone(),
         }
     }
 }
@@ -926,7 +985,6 @@ impl CryptoTensors {
             return Ok(None);
         }
 
-        // Create cryptor for each tensor
         let cryptors = matched_tensors
             .iter()
             .map(|name| {
@@ -1253,14 +1311,30 @@ impl CryptoTensors {
                 ));
             }
         }
-        let master_key: Arc<[u8]> = Arc::from(enc_key.get_master_key_bytes()?);
+        let master_key = Zeroizing::new(enc_key.get_master_key_bytes()?);
+        let master_key_ctx = prepare_key_context(&master_key, &enc_key.alg)?;
 
         let mut cryptors: HashMap<String, SingleCryptor> = serde_json::from_str(encryption_info)
             .map_err(|e| CryptoTensorsError::Encryption(e.to_string()))?;
-        for cryptor in cryptors.values_mut() {
-            cryptor.master_key = master_key.clone();
-            cryptor.enc_algo = enc_key.alg.clone();
+
+        // Context preparation: use parallel when enough tensors to amortize rayon overhead
+        if cryptors.len() >= PARALLEL_CONTEXT_THRESHOLD {
+            let prep_result: Result<Vec<()>, CryptoTensorsError> = cryptors
+                .par_iter_mut()
+                .map(|(_, cryptor)| {
+                    cryptor.enc_algo = enc_key.alg.clone();
+                    cryptor.prepare_context(&master_key_ctx)
+                })
+                .collect();
+            prep_result?;
+        } else {
+            for (_, cryptor) in cryptors.iter_mut() {
+                cryptor.enc_algo = enc_key.alg.clone();
+                cryptor.prepare_context(&master_key_ctx)?;
+            }
         }
+
+        // master_key (Zeroizing<Vec<u8>>) is wiped here as it goes out of scope
 
         Ok(Some(Self {
             cryptors,
@@ -1312,30 +1386,29 @@ impl CryptoTensors {
         }
     }
 
-    /// Silently encrypt data for a tensor
+    /// Encrypt all tensors that have a matching cryptor.
     ///
-    /// If no encryptor exists for the tensor, does nothing.
-    ///
-    /// # Arguments
-    ///
-    /// * `tensor_name` - The name of the tensor
-    /// * `data` - The data to encrypt
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - If encryption succeeds or no encryptor exists
-    /// * `Err(CryptoTensorsError)` - If encryption fails
-    ///
-    /// # Errors
-    ///
-    /// * `RandomGeneration` - If key generation fails
-    /// * `Encryption` - If data encryption fails
-    /// * `KeyCreation` - If key creation fails
-    pub fn silent_encrypt(&self, tensor_name: &str, data: &[u8]) -> Result<(), CryptoTensorsError> {
-        match self.get(tensor_name) {
-            Some(cryptor) => cryptor.encrypt(data),
-            None => Ok(()),
+    /// Iterates `self.cryptors` and calls `get_data(name)` only for tensors
+    /// that need encryption — the caller never has to know which tensors are
+    /// selected. Prepares the master-key context once, symmetric with the
+    /// deserialize path where `prepare_context` receives a shared context.
+    pub fn encrypt_tensors<'a>(
+        &self,
+        get_data: impl Fn(&str) -> Option<Cow<'a, [u8]>>,
+    ) -> Result<(), CryptoTensorsError> {
+        if self.cryptors.is_empty() {
+            return Ok(());
         }
+
+        let master_key = Zeroizing::new(self.enc_key.get_master_key_bytes()?);
+        let master_key_ctx = prepare_key_context(&master_key, &self.enc_key.alg)?;
+
+        for (name, cryptor) in &self.cryptors {
+            if let Some(data) = get_data(name) {
+                cryptor.encrypt(&data, &master_key_ctx)?;
+            }
+        }
+        Ok(())
     }
 
     /// Get decrypted buffer as Arc for zero-copy sharing

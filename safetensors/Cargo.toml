@@ -1,6 +1,6 @@
 [package]
 name = "cryptotensors"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.80"
 homepage = "https://github.com/aiyah-meloken/cryptotensors"
@@ -38,6 +38,7 @@ base64 = "0.22"
 regorus = "0.4"
 thiserror = "2.0"
 libloading = "0.8"
+rayon = "1.11.0"
 
 [dev-dependencies]
 criterion = "0.6"

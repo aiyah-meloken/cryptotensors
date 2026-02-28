@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1772262166282,
+  "lastUpdate": 1772267945990,
   "repoUrl": "https://github.com/aiyah-meloken/cryptotensors",
   "entries": {
     "Benchmark": [
@@ -11322,6 +11322,180 @@ window.BENCHMARK_DATA = {
             "unit": "iter/sec",
             "range": "stddev: 0.06108519574031597",
             "extra": "mean: 419.3757298000037 msec\nrounds: 5"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "aiyah-meloken",
+            "username": "aiyah-meloken"
+          },
+          "committer": {
+            "name": "aiyah-meloken",
+            "username": "aiyah-meloken"
+          },
+          "id": "9bd6f6c08641cab740a8a8b1ce8cd6e542885c4a",
+          "message": "feat/opt: chunked decryption",
+          "timestamp": "2026-02-28T06:58:35Z",
+          "url": "https://github.com/aiyah-meloken/cryptotensors/pull/13/commits/9bd6f6c08641cab740a8a8b1ce8cd6e542885c4a"
+        },
+        "date": 1772267945522,
+        "tool": "pytest",
+        "benches": [
+          {
+            "name": "benches/test_flax.py::test_flax_flax_load",
+            "value": 2.3490799710604358,
+            "unit": "iter/sec",
+            "range": "stddev: 0.034904091906249976",
+            "extra": "mean: 425.6985766000014 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_flax.py::test_flax_sf_load",
+            "value": 4.249676034871917,
+            "unit": "iter/sec",
+            "range": "stddev: 0.00696488417043951",
+            "extra": "mean: 235.31205479999358 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_flax_crypto.py::test_flax_crypto_save_cpu",
+            "value": 0.6711973793686873,
+            "unit": "iter/sec",
+            "range": "stddev: 0.27731514010993813",
+            "extra": "mean: 1.4898747085999902 sec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_flax_crypto.py::test_flax_crypto_load_cpu",
+            "value": 5.100581570423778,
+            "unit": "iter/sec",
+            "range": "stddev: 0.006698774611754428",
+            "extra": "mean: 196.05607442857067 msec\nrounds: 7"
+          },
+          {
+            "name": "benches/test_numpy_crypto.py::test_numpy_crypto_save",
+            "value": 2.910496537944825,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0667741981828588",
+            "extra": "mean: 343.5839854000051 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_numpy_crypto.py::test_numpy_crypto_load",
+            "value": 53.35096317588025,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0006956123188198699",
+            "extra": "mean: 18.743804056607843 msec\nrounds: 53"
+          },
+          {
+            "name": "benches/test_paddle.py::test_paddle_paddle_load",
+            "value": 9.579662361479008,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0007878733923462477",
+            "extra": "mean: 104.3878126666679 msec\nrounds: 6"
+          },
+          {
+            "name": "benches/test_paddle.py::test_paddle_sf_load",
+            "value": 5.467180855025851,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0004062136348800523",
+            "extra": "mean: 182.90962500000774 msec\nrounds: 6"
+          },
+          {
+            "name": "benches/test_paddle_crypto.py::test_paddle_crypto_save_cpu",
+            "value": 0.7204251823207567,
+            "unit": "iter/sec",
+            "range": "stddev: 0.03335135638476601",
+            "extra": "mean: 1.3880691909999996 sec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_paddle_crypto.py::test_paddle_crypto_load_cpu",
+            "value": 7.325259069576312,
+            "unit": "iter/sec",
+            "range": "stddev: 0.001270432304110023",
+            "extra": "mean: 136.51394312499576 msec\nrounds: 8"
+          },
+          {
+            "name": "benches/test_pt.py::test_pt_pt_load_cpu",
+            "value": 14.1392959749022,
+            "unit": "iter/sec",
+            "range": "stddev: 0.00043269083290415456",
+            "extra": "mean: 70.72487921428612 msec\nrounds: 14"
+          },
+          {
+            "name": "benches/test_pt.py::test_pt_sf_load_cpu",
+            "value": 288.1591557466353,
+            "unit": "iter/sec",
+            "range": "stddev: 0.00005422794460730259",
+            "extra": "mean: 3.4703044482794527 msec\nrounds: 29"
+          },
+          {
+            "name": "benches/test_pt.py::test_pt_pt_load_cpu_small",
+            "value": 11.477203180420824,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0005097000757547477",
+            "extra": "mean: 87.12924083333462 msec\nrounds: 12"
+          },
+          {
+            "name": "benches/test_pt.py::test_pt_sf_load_cpu_small",
+            "value": 59.398913121523485,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0001532334357831756",
+            "extra": "mean: 16.83532488135116 msec\nrounds: 59"
+          },
+          {
+            "name": "benches/test_pt_crypto.py::test_pt_crypto_save_cpu",
+            "value": 0.7188378583308638,
+            "unit": "iter/sec",
+            "range": "stddev: 0.05337094610174742",
+            "extra": "mean: 1.3911342988000002 sec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_pt_crypto.py::test_pt_crypto_load_cpu",
+            "value": 10.358408163941938,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0010969534376235315",
+            "extra": "mean: 96.53993009090361 msec\nrounds: 11"
+          },
+          {
+            "name": "benches/test_pt_crypto.py::test_pt_crypto_save_cpu_small",
+            "value": 21.775793971306623,
+            "unit": "iter/sec",
+            "range": "stddev: 0.04000476822847725",
+            "extra": "mean: 45.92255057692377 msec\nrounds: 26"
+          },
+          {
+            "name": "benches/test_pt_crypto.py::test_pt_crypto_load_cpu_small",
+            "value": 56.87672069408214,
+            "unit": "iter/sec",
+            "range": "stddev: 0.000796121440801875",
+            "extra": "mean: 17.58188566071896 msec\nrounds: 56"
+          },
+          {
+            "name": "benches/test_tf.py::test_tf_tf_load",
+            "value": 3.5044776511193745,
+            "unit": "iter/sec",
+            "range": "stddev: 0.019784397549877368",
+            "extra": "mean: 285.34923019999496 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_tf.py::test_tf_sf_load",
+            "value": 3.945667218596354,
+            "unit": "iter/sec",
+            "range": "stddev: 0.005672168053944047",
+            "extra": "mean: 253.4425597999984 msec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_tf_crypto.py::test_tf_crypto_save_cpu",
+            "value": 0.6937258457329639,
+            "unit": "iter/sec",
+            "range": "stddev: 0.10760365325962833",
+            "extra": "mean: 1.4414916298000093 sec\nrounds: 5"
+          },
+          {
+            "name": "benches/test_tf_crypto.py::test_tf_crypto_load_cpu",
+            "value": 2.933177299251571,
+            "unit": "iter/sec",
+            "range": "stddev: 0.031935371077423606",
+            "extra": "mean: 340.9272259999966 msec\nrounds: 5"
           }
         ]
       }

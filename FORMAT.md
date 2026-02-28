@@ -102,7 +102,7 @@ In v2, large tensors are logically divided into chunks of `chunk_size` bytes (th
 - **`tags`**: A concatenated binary blob of all authentication tags, appended sequentially for chunk 0, 1, 2, etc., and then base64-encoded. Length equals `num_chunks * tag_length` (where `tag_length` is 16 bytes for AES-GCM or ChaCha20-Poly1305).
 
 ## `__signature__`
-A base64 encoded Ed25519 signature over the entire `__metadata__` JSON, excluding the `__signature__` field itself to prevent recursive dependencies.
+A base64 encoded Ed25519 signature over the entire header JSON object (all tensor entries plus the `__metadata__` field), with the `__signature__` field itself excluded from the signed data to prevent recursive dependencies.
 
 ## `__policy__`
 A JSON-serialized struct containing local and remote [Rego](https://www.openpolicyagent.org/docs/latest/policy-language/) access control policies.

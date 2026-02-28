@@ -200,10 +200,6 @@ pub fn encrypt_data_with_iv(
     ctx: &PreparedKeyContext,
     iv: &[u8],
 ) -> Result<Vec<u8>, CryptoTensorsError> {
-    if in_out.is_empty() {
-        return Ok(Vec::new());
-    }
-
     let aead_algo = ctx.algo.get_aead_algo();
     if iv.len() != aead_algo.nonce_len() {
         return Err(CryptoTensorsError::InvalidIvLength {
@@ -308,7 +304,11 @@ pub fn derive_chunk_iv(base_iv: &[u8], chunk_index: usize) -> Result<Vec<u8>, Cr
     counter_bytes.copy_from_slice(&iv[8..12]);
     let counter = u32::from_be_bytes(counter_bytes);
 
-    let new_counter = counter.wrapping_add(chunk_index as u32);
+    let chunk_idx_u32 = u32::try_from(chunk_index)
+        .map_err(|_| CryptoTensorsError::Encryption("Chunk index exceeds u32 max".to_string()))?;
+    let new_counter = counter.checked_add(chunk_idx_u32).ok_or_else(|| {
+        CryptoTensorsError::Encryption("Chunk index overflowed IV counter".to_string())
+    })?;
     iv[8..12].copy_from_slice(&new_counter.to_be_bytes());
 
     Ok(iv)
@@ -336,8 +336,8 @@ mod tests {
 
         // Base IV with non-zero counter
         let base_iv_non_zero = vec![0, 1, 2, 3, 4, 5, 6, 7, 255, 255, 255, 255];
-        let iv_wrap = derive_chunk_iv(&base_iv_non_zero, 1).unwrap();
-        assert_eq!(iv_wrap, vec![0, 1, 2, 3, 4, 5, 6, 7, 0, 0, 0, 0]); // wrapping_add overflow
+        let res = derive_chunk_iv(&base_iv_non_zero, 1);
+        assert!(res.is_err()); // checked_add overflow should return an error
     }
 
     #[test]

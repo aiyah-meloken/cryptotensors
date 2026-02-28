@@ -1234,11 +1234,20 @@ impl CryptoTensors {
             .version
             .clone()
             .unwrap_or_else(|| CRYPTOTENSORS_VERSION_V2.to_string());
+        if version != CRYPTOTENSORS_VERSION_V1 && version != CRYPTOTENSORS_VERSION_V2 {
+            return Err(CryptoTensorsError::UnsupportedVersion(version.clone()));
+        }
 
         let chunk_size = if version == CRYPTOTENSORS_VERSION_V1 {
             None
         } else {
-            Some(config.chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE))
+            let size = config.chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE);
+            if size == 0 {
+                return Err(CryptoTensorsError::InvalidKey(
+                    "chunk_size must be greater than 0".to_string(),
+                ));
+            }
+            Some(size)
         };
 
         Ok(Some(Self {
@@ -1494,10 +1503,28 @@ impl CryptoTensors {
         if version != CRYPTOTENSORS_VERSION_V1 && version != CRYPTOTENSORS_VERSION_V2 {
             return Err(CryptoTensorsError::UnsupportedVersion(version.to_string()));
         }
-        let chunk_size = key_materials
-            .get("chunk_size")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize);
+        let chunk_size = match key_materials.get("chunk_size") {
+            Some(v) => {
+                let raw = v.as_u64().ok_or_else(|| {
+                    CryptoTensorsError::InvalidKey(
+                        "Invalid chunk_size in __crypto_keys__ header".to_string(),
+                    )
+                })?;
+                if raw == 0 {
+                    return Err(CryptoTensorsError::InvalidKey(
+                        "chunk_size must be greater than 0 in __crypto_keys__ header".to_string(),
+                    ));
+                }
+                Some(raw as usize)
+            }
+            None => {
+                if version == CRYPTOTENSORS_VERSION_V2 {
+                    Some(DEFAULT_CHUNK_SIZE)
+                } else {
+                    None
+                }
+            }
+        };
         let mut enc_key = KeyMaterial::from_header(&key_materials["enc"])?;
         let mut sign_key = KeyMaterial::from_header(&key_materials["sign"])?;
 

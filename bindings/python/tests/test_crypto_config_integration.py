@@ -11,7 +11,7 @@ import os
 torch = pytest.importorskip("torch")
 numpy = pytest.importorskip("numpy")
 
-from cryptotensors import (
+from cryptotensors import (  # noqa: E402
     SerializeCryptoConfig,
     DeserializeCryptoConfig,
     register_direct_key_provider,
@@ -19,8 +19,8 @@ from cryptotensors import (
     safe_open,
     rewrap_file,
 )
-from cryptotensors.torch import save_file
-from crypto_utils import generate_test_keys
+from cryptotensors.torch import save_file  # noqa: E402
+from crypto_utils import generate_test_keys  # noqa: E402
 
 
 class TestConfigIntegration:

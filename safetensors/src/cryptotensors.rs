@@ -750,8 +750,7 @@ impl SingleCryptor {
                         CryptoTensorsError::Decryption(format!("read failed: {}", e))
                     })?;
                 }
-
-                self.perform_decryption(&mut buffer, &ctx_arc, chunk_size)?;
+                self.perform_decryption(&mut buffer, ctx_arc, chunk_size)?;
 
                 Ok(Arc::new(buffer))
             })
@@ -770,7 +769,7 @@ impl SingleCryptor {
                 })?;
 
                 let mut buffer = data.to_vec();
-                self.perform_decryption(&mut buffer, &ctx_arc, chunk_size)?;
+                self.perform_decryption(&mut buffer, ctx_arc, chunk_size)?;
 
                 Ok(Arc::new(buffer))
             })
@@ -875,8 +874,7 @@ impl SingleCryptor {
             let rng = rand::SystemRandom::new();
             rng.fill(&mut base_iv)
                 .map_err(|e| CryptoTensorsError::RandomGeneration(e.to_string()))?;
-
-            let chunk_count = (buffer.len() + c_size - 1) / c_size;
+            let chunk_count = buffer.len().div_ceil(c_size);
             let mut all_tags =
                 vec![0u8; std::cmp::max(1, chunk_count) * data_key_ctx.algo.tag_len()];
 

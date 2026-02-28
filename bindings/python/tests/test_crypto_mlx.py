@@ -2,7 +2,6 @@ import os
 import platform
 import tempfile
 import unittest
-import numpy as np
 
 HAS_MLX = False
 if platform.system() == "Darwin":

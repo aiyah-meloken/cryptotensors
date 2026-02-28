@@ -1,7 +1,5 @@
 import os
 import tempfile
-import pytest
-import numpy as np
 import tensorflow as tf
 from cryptotensors.tensorflow import load_file, save_file
 

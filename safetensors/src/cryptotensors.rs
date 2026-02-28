@@ -27,6 +27,11 @@ use thiserror::Error;
 /// Supported CryptoTensors format version
 pub const CRYPTOTENSORS_VERSION: &str = "1";
 
+/// Minimum number of tensors required to use rayon parallel iteration for
+/// context preparation (Base64 decode, DEK unwrap, Key Schedule).
+/// Below this threshold, serial iteration avoids thread scheduling overhead.
+const PARALLEL_CONTEXT_THRESHOLD: usize = 16;
+
 // ============================================================================
 // Error Types - Organized by category using thiserror
 // ============================================================================
@@ -1302,15 +1307,22 @@ impl CryptoTensors {
         let mut cryptors: HashMap<String, SingleCryptor> = serde_json::from_str(encryption_info)
             .map_err(|e| CryptoTensorsError::Encryption(e.to_string()))?;
 
-        // Parallel context preparation
-        let prep_result: Result<Vec<()>, CryptoTensorsError> = cryptors
-            .par_iter_mut()
-            .map(|(_, cryptor)| {
+        // Context preparation: use parallel when enough tensors to amortize rayon overhead
+        if cryptors.len() >= PARALLEL_CONTEXT_THRESHOLD {
+            let prep_result: Result<Vec<()>, CryptoTensorsError> = cryptors
+                .par_iter_mut()
+                .map(|(_, cryptor)| {
+                    cryptor.enc_algo = enc_key.alg.clone();
+                    cryptor.prepare_context(&master_key_ctx)
+                })
+                .collect();
+            prep_result?;
+        } else {
+            for (_, cryptor) in cryptors.iter_mut() {
                 cryptor.enc_algo = enc_key.alg.clone();
-                cryptor.prepare_context(&master_key_ctx)
-            })
-            .collect();
-        prep_result?;
+                cryptor.prepare_context(&master_key_ctx)?;
+            }
+        }
 
         // Zeroize master key by dropping Context and Raw bytes when scope ends
 

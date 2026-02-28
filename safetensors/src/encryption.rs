@@ -188,6 +188,44 @@ pub fn encrypt_data(
     Ok((nonce_bytes, tag.as_ref().to_vec()))
 }
 
+/// Encrypt data using a prepared key context and a specific IV
+///
+/// # Arguments
+///
+/// * `in_out` - The buffer containing the data to encrypt.
+/// * `ctx` - The prepared key context
+/// * `iv` - The IV to use for encryption
+pub fn encrypt_data_with_iv(
+    in_out: &mut [u8],
+    ctx: &PreparedKeyContext,
+    iv: &[u8],
+) -> Result<Vec<u8>, CryptoTensorsError> {
+    if in_out.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let aead_algo = ctx.algo.get_aead_algo();
+    if iv.len() != aead_algo.nonce_len() {
+        return Err(CryptoTensorsError::InvalidIvLength {
+            expected: aead_algo.nonce_len(),
+            actual: iv.len(),
+        });
+    }
+
+    let mut nonce_bytes = vec![0u8; aead_algo.nonce_len()];
+    nonce_bytes.copy_from_slice(iv);
+    // Length is verified to be exactly nonce_len()
+    let nonce = aead::Nonce::assume_unique_for_key(nonce_bytes.try_into().unwrap());
+
+    // Encrypt the data in place
+    let tag = ctx
+        .key
+        .seal_in_place_separate_tag(nonce, aead::Aad::empty(), in_out)
+        .map_err(|e| CryptoTensorsError::Encryption(e.to_string()))?;
+
+    Ok(tag.as_ref().to_vec())
+}
+
 /// Decrypt data using a prepared key context
 ///
 /// # Arguments
@@ -245,4 +283,74 @@ pub fn decrypt_data(
         .map_err(|e| CryptoTensorsError::Decryption(e.to_string()))?;
 
     Ok(())
+}
+
+/// Derives the IV for a specific chunk using a base IV and the chunk index.
+///
+/// Complies with NIST SP 800-38D deterministic IV construction:
+/// IV = base_iv[0..8] || (u32_from_be(base_iv[8..12]) + chunk_index).to_be_bytes()
+/// Supported algorithms (AES-GCM, ChaCha20-Poly1305) use 12-byte nonces.
+///
+/// # Arguments
+///
+/// * `base_iv` - The 12-byte base IV generated for the tensor
+/// * `chunk_index` - The zero-based index of the chunk
+pub fn derive_chunk_iv(base_iv: &[u8], chunk_index: usize) -> Result<Vec<u8>, CryptoTensorsError> {
+    if base_iv.len() < 12 {
+        return Err(CryptoTensorsError::InvalidIvLength {
+            expected: 12,
+            actual: base_iv.len(),
+        });
+    }
+
+    let mut iv = base_iv[0..12].to_vec();
+    let mut counter_bytes = [0u8; 4];
+    counter_bytes.copy_from_slice(&iv[8..12]);
+    let counter = u32::from_be_bytes(counter_bytes);
+
+    let new_counter = counter.wrapping_add(chunk_index as u32);
+    iv[8..12].copy_from_slice(&new_counter.to_be_bytes());
+
+    Ok(iv)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_derive_chunk_iv() {
+        let base_iv = vec![0, 1, 2, 3, 4, 5, 6, 7, 0, 0, 0, 0];
+
+        // Chunk 0
+        let iv_0 = derive_chunk_iv(&base_iv, 0).unwrap();
+        assert_eq!(iv_0, vec![0, 1, 2, 3, 4, 5, 6, 7, 0, 0, 0, 0]);
+
+        // Chunk 1
+        let iv_1 = derive_chunk_iv(&base_iv, 1).unwrap();
+        assert_eq!(iv_1, vec![0, 1, 2, 3, 4, 5, 6, 7, 0, 0, 0, 1]);
+
+        // Chunk 256 (wraps second byte)
+        let iv_256 = derive_chunk_iv(&base_iv, 256).unwrap();
+        assert_eq!(iv_256, vec![0, 1, 2, 3, 4, 5, 6, 7, 0, 0, 1, 0]);
+
+        // Base IV with non-zero counter
+        let base_iv_non_zero = vec![0, 1, 2, 3, 4, 5, 6, 7, 255, 255, 255, 255];
+        let iv_wrap = derive_chunk_iv(&base_iv_non_zero, 1).unwrap();
+        assert_eq!(iv_wrap, vec![0, 1, 2, 3, 4, 5, 6, 7, 0, 0, 0, 0]); // wrapping_add overflow
+    }
+
+    #[test]
+    fn test_derive_chunk_iv_invalid_length() {
+        let short_iv = vec![0; 11];
+        let res = derive_chunk_iv(&short_iv, 0);
+        assert!(res.is_err());
+        match res.unwrap_err() {
+            CryptoTensorsError::InvalidIvLength { expected, actual } => {
+                assert_eq!(expected, 12);
+                assert_eq!(actual, 11);
+            }
+            _ => panic!("Expected InvalidIvLength error"),
+        }
+    }
 }

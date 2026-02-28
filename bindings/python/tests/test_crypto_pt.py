@@ -40,6 +40,33 @@ class CryptoPtTestCase(unittest.TestCase):
                 os.unlink(filename)
             except (OSError, PermissionError):
                 pass
+                
+    def test_roundtrip_encrypted_v1(self):
+        # Explicitly configure using version 1
+        config_v1 = create_crypto_config(**self.keys, version="1")
+        with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
+            filename = f.name
+        try:
+            save_file(self.data, filename, config=config_v1)
+            
+            # Verify using safe_open that this is definitely a V1 file
+            with safe_open(filename, framework="pt") as handle:
+                reserved_metadata = handle.reserved_metadata()
+                import json
+                keys_meta = json.loads(reserved_metadata.get("__crypto_keys__", "{}"))
+                self.assertEqual(keys_meta.get("version"), "1")
+                self.assertNotIn("chunk_size", keys_meta)
+                
+            reloaded = load_file(filename)
+
+            for k, v in self.data.items():
+                tv = reloaded[k]
+                self.assertTrue(torch.allclose(v, tv))
+        finally:
+            try:
+                os.unlink(filename)
+            except (OSError, PermissionError):
+                pass
 
     def test_roundtrip_algorithms(self):
         algos = ["aes128gcm", "aes256gcm", "chacha20poly1305"]

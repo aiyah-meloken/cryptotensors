@@ -26,14 +26,17 @@ use zeroize::Zeroizing;
 // ============================================================================
 // Version Constants
 // ============================================================================
-
-/// Supported CryptoTensors format version
-pub const CRYPTOTENSORS_VERSION: &str = "1";
-
+/// CryptoTensors V1 format version (Monolithic Encryption)
+pub const CRYPTOTENSORS_VERSION_V1: &str = "1";
+/// CryptoTensors V2 format version (Chunked Encryption)
+pub const CRYPTOTENSORS_VERSION_V2: &str = "2";
 /// Minimum number of tensors required to use rayon parallel iteration for
 /// context preparation (Base64 decode, DEK unwrap, Key Schedule).
 /// Below this threshold, serial iteration avoids thread scheduling overhead.
 const PARALLEL_CONTEXT_THRESHOLD: usize = 16;
+
+/// Default chunk size for tensor fractional encryption = 2MB
+pub const DEFAULT_CHUNK_SIZE: usize = 2 * 1024 * 1024;
 
 // ============================================================================
 // Error Types - Organized by category using thiserror
@@ -229,6 +232,11 @@ mod cryptor_serde {
     }
 }
 
+/// Check if OnceCell<String> is empty
+fn is_empty_cell(cell: &OnceCell<String>) -> bool {
+    cell.get().is_none()
+}
+
 /// Configuration for serializing tensors with encryption
 ///
 /// Key loading: (1) Direct keys (`enc_key`/`sign_key`) — use as-is, ignore kid/jku.
@@ -254,6 +262,12 @@ pub struct SerializeCryptoConfig {
 
     /// Tensors to encrypt (None = all)
     pub tensor_filter: Option<Vec<String>>,
+
+    /// Size in bytes for chunked encryption. If None, uses DEFAULT_CHUNK_SIZE.
+    pub chunk_size: Option<usize>,
+
+    /// Format version to serialize to ("1" or "2"). Defaults to "2".
+    pub version: Option<String>,
 }
 
 impl SerializeCryptoConfig {
@@ -307,6 +321,11 @@ impl SerializeCryptoConfig {
     /// Set tensor filter
     pub fn tensor_filter(mut self, filter: Vec<String>) -> Self {
         self.tensor_filter = Some(filter);
+        self
+    }
+    /// Set chunk size
+    pub fn chunk_size(mut self, size: usize) -> Self {
+        self.chunk_size = Some(size);
         self
     }
 }
@@ -365,12 +384,18 @@ pub struct SingleCryptor {
     /// Authentication tag for key encryption encoded in base64
     #[serde(with = "cryptor_serde")]
     key_tag: OnceCell<String>,
-    /// Initialization vector for data encryption encoded in base64
-    #[serde(with = "cryptor_serde")]
+    /// Initialization vector for data encryption encoded in base64 (v1 format)
+    #[serde(default, skip_serializing_if = "is_empty_cell", with = "cryptor_serde")]
     iv: OnceCell<String>,
-    /// Authentication tag for data encryption encoded in base64
-    #[serde(with = "cryptor_serde")]
+    /// Authentication tag for data encryption encoded in base64 (v1 format)
+    #[serde(default, skip_serializing_if = "is_empty_cell", with = "cryptor_serde")]
     tag: OnceCell<String>,
+    /// Base IV for chunked encryption data IV derivation encoded in base64 (v2 format)
+    #[serde(default, skip_serializing_if = "is_empty_cell", with = "cryptor_serde")]
+    base_iv: OnceCell<String>,
+    /// Concatenated authentication tags for chunked data encryption encoded in base64 (v2 format)
+    #[serde(default, skip_serializing_if = "is_empty_cell", with = "cryptor_serde")]
+    tags: OnceCell<String>,
     /// Buffer for decrypted data (Arc for zero-copy sharing with Python)
     #[serde(skip)]
     buffer: OnceCell<Arc<Vec<u8>>>,
@@ -383,10 +408,14 @@ pub struct SingleCryptor {
 pub(crate) struct CryptoContext {
     /// Prepared key context for data decryption
     pub(crate) data_key_ctx: PreparedKeyContext,
-    /// Initialization vector bytes
-    pub(crate) iv: Vec<u8>,
-    /// Authentication tag bytes
-    pub(crate) tag: Vec<u8>,
+    /// Initialization vector bytes (v1)
+    pub(crate) iv: Option<Vec<u8>>,
+    /// Authentication tag bytes (v1)
+    pub(crate) tag: Option<Vec<u8>>,
+    /// Base IV bytes for chunk derivation (v2)
+    pub(crate) base_iv: Option<Vec<u8>>,
+    /// Concatenated tag bytes (v2)
+    pub(crate) tags: Option<Vec<u8>>,
     /// Plaintext DEK — stored in a Zeroizing wrapper so the buffer is wiped on drop
     pub(crate) data_key: Zeroizing<Vec<u8>>,
 }
@@ -395,8 +424,10 @@ impl fmt::Debug for CryptoContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CryptoContext")
             .field("data_key_ctx", &self.data_key_ctx)
-            .field("iv", &self.iv)
-            .field("tag", &self.tag)
+            .field("iv", &self.iv.is_some())
+            .field("tag", &self.tag.is_some())
+            .field("base_iv", &self.base_iv.is_some())
+            .field("tags_len", &self.tags.as_ref().map(|t| t.len()))
             .field("data_key", &"[REDACTED]")
             .finish()
     }
@@ -426,6 +457,8 @@ impl SingleCryptor {
             key_tag: OnceCell::new(),
             iv: OnceCell::new(),
             tag: OnceCell::new(),
+            base_iv: OnceCell::new(),
+            tags: OnceCell::new(),
             buffer: OnceCell::new(),
             ctx: OnceCell::new(),
         })
@@ -502,20 +535,32 @@ impl SingleCryptor {
             return Ok(());
         }
 
-        let iv = BASE64
-            .decode(
-                self.iv
-                    .get()
-                    .ok_or_else(|| CryptoTensorsError::KeyUnwrap("iv is empty".to_string()))?,
-            )
+        let iv = self
+            .iv
+            .get()
+            .map(|s| BASE64.decode(s))
+            .transpose()
             .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
 
-        let tag = BASE64
-            .decode(
-                self.tag
-                    .get()
-                    .ok_or_else(|| CryptoTensorsError::KeyUnwrap("tag is empty".to_string()))?,
-            )
+        let tag = self
+            .tag
+            .get()
+            .map(|s| BASE64.decode(s))
+            .transpose()
+            .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
+
+        let base_iv = self
+            .base_iv
+            .get()
+            .map(|s| BASE64.decode(s))
+            .transpose()
+            .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
+
+        let tags = self
+            .tags
+            .get()
+            .map(|s| BASE64.decode(s))
+            .transpose()
             .map_err(|e| CryptoTensorsError::KeyUnwrap(e.to_string()))?;
 
         let mut data_key = Zeroizing::new(
@@ -551,6 +596,8 @@ impl SingleCryptor {
                 data_key_ctx,
                 iv,
                 tag,
+                base_iv,
+                tags,
                 data_key,
             }))
             .map_err(|_| {
@@ -580,6 +627,7 @@ impl SingleCryptor {
         file: &std::fs::File,
         file_offset: u64,
         len: usize,
+        chunk_size: Option<usize>,
     ) -> Result<&[u8], CryptoTensorsError> {
         self.buffer
             .get_or_try_init(|| {
@@ -587,7 +635,82 @@ impl SingleCryptor {
                     CryptoTensorsError::Decryption("Context not prepared".to_string())
                 })?;
 
-                // Atomic positioned read: pread (Unix) / seek_read (Windows)
+                let get_strategy = || -> String {
+                    std::env::var("CRYPTOTENSORS_PREAD_STRATEGY")
+                        .unwrap_or_else(|_| "B".to_string())
+                };
+
+                // Pipeline Pread Strategy B (Only applicable for V2 chunked encryption on Unix)
+                #[cfg(unix)]
+                {
+                    if let (Some(c_size), "B") = (chunk_size, get_strategy().as_str()) {
+                        let mut buffer = vec![0u8; len];
+                        let tags = ctx_arc.tags.as_ref().ok_or_else(|| {
+                            CryptoTensorsError::Decryption(
+                                "Missing tags for chunked decryption".to_string(),
+                            )
+                        })?;
+                        let base_iv = ctx_arc.base_iv.as_ref().ok_or_else(|| {
+                            CryptoTensorsError::Decryption(
+                                "Missing base_iv for chunked decryption".to_string(),
+                            )
+                        })?;
+                        let tag_len = ctx_arc.data_key_ctx.algo.tag_len();
+
+                        if buffer.is_empty() {
+                            if tags.len() < tag_len {
+                                return Err(CryptoTensorsError::Decryption(
+                                    "Missing tag for empty tensor".to_string(),
+                                ));
+                            }
+                            crate::encryption::decrypt_data(
+                                &mut [],
+                                &ctx_arc.data_key_ctx,
+                                base_iv,
+                                &tags[0..tag_len],
+                            )?;
+                        } else {
+                            use std::os::unix::fs::FileExt;
+
+                            buffer.par_chunks_mut(c_size).enumerate().try_for_each(
+                                |(i, chunk)| {
+                                    let expected_offset = i * tag_len;
+                                    if expected_offset + tag_len > tags.len() {
+                                        return Err(CryptoTensorsError::Decryption(format!(
+                                            "Missing tag for chunk {}",
+                                            i
+                                        )));
+                                    }
+                                    let tag = &tags[expected_offset..expected_offset + tag_len];
+
+                                    // 1. Derive IV (pure CPU, hidden latency before IO blocking)
+                                    let iv = crate::encryption::derive_chunk_iv(base_iv, i)?;
+
+                                    // 2. Parallel pread for this specific chunk
+                                    let chunk_file_offset = file_offset + (i * c_size) as u64;
+                                    file.read_exact_at(chunk, chunk_file_offset).map_err(|e| {
+                                        CryptoTensorsError::Decryption(format!(
+                                            "pread failed: {}",
+                                            e
+                                        ))
+                                    })?;
+
+                                    // 3. In-place decryption
+                                    crate::encryption::decrypt_data(
+                                        chunk,
+                                        &ctx_arc.data_key_ctx,
+                                        &iv,
+                                        tag,
+                                    )
+                                },
+                            )?;
+                        }
+
+                        return Ok(Arc::new(buffer));
+                    }
+                }
+
+                // Strategy A (Monolithic Pread) or Fallback for V1/Non-Unix
                 let mut buffer = vec![0u8; len];
                 #[cfg(unix)]
                 {
@@ -628,12 +751,7 @@ impl SingleCryptor {
                     })?;
                 }
 
-                decrypt_data(
-                    &mut buffer,
-                    &ctx_arc.data_key_ctx,
-                    &ctx_arc.iv,
-                    &ctx_arc.tag,
-                )?;
+                self.perform_decryption(&mut buffer, &ctx_arc, chunk_size)?;
 
                 Ok(Arc::new(buffer))
             })
@@ -644,7 +762,7 @@ impl SingleCryptor {
     ///
     /// This copies the data from the provided slice and decrypts in-place.
     /// Used by both the Rust crate API and Python bindings (when data is already in memory).
-    fn decrypt(&self, data: &[u8]) -> Result<&[u8], CryptoTensorsError> {
+    fn decrypt(&self, data: &[u8], chunk_size: Option<usize>) -> Result<&[u8], CryptoTensorsError> {
         self.buffer
             .get_or_try_init(|| {
                 let ctx_arc = self.ctx.get().ok_or_else(|| {
@@ -652,16 +770,71 @@ impl SingleCryptor {
                 })?;
 
                 let mut buffer = data.to_vec();
-                decrypt_data(
-                    &mut buffer,
-                    &ctx_arc.data_key_ctx,
-                    &ctx_arc.iv,
-                    &ctx_arc.tag,
-                )?;
+                self.perform_decryption(&mut buffer, &ctx_arc, chunk_size)?;
 
                 Ok(Arc::new(buffer))
             })
             .map(|arc_ref| arc_ref.as_slice())
+    }
+
+    /// Perform the actual decryption on an in-memory buffer (V1 or V2 chunked)
+    fn perform_decryption(
+        &self,
+        buffer: &mut [u8],
+        ctx_arc: &CryptoContext,
+        chunk_size: Option<usize>,
+    ) -> Result<(), CryptoTensorsError> {
+        if let Some(c_size) = chunk_size {
+            // V2 chunked decryption
+            let base_iv = ctx_arc.base_iv.as_ref().ok_or_else(|| {
+                CryptoTensorsError::Decryption("Missing base_iv for chunked decryption".to_string())
+            })?;
+            let tags = ctx_arc.tags.as_ref().ok_or_else(|| {
+                CryptoTensorsError::Decryption("Missing tags for chunked decryption".to_string())
+            })?;
+
+            let tag_len = ctx_arc.data_key_ctx.algo.tag_len();
+
+            if buffer.is_empty() {
+                if tags.len() < tag_len {
+                    return Err(CryptoTensorsError::Decryption(
+                        "Missing tag for empty tensor".to_string(),
+                    ));
+                }
+                crate::encryption::decrypt_data(
+                    &mut [],
+                    &ctx_arc.data_key_ctx,
+                    base_iv,
+                    &tags[0..tag_len],
+                )?;
+            } else {
+                buffer
+                    .par_chunks_mut(c_size)
+                    .enumerate()
+                    .try_for_each(|(i, chunk)| {
+                        let expected_offset = i * tag_len;
+                        if expected_offset + tag_len > tags.len() {
+                            return Err(CryptoTensorsError::Decryption(format!(
+                                "Missing tag for chunk {}",
+                                i
+                            )));
+                        }
+                        let tag = &tags[expected_offset..expected_offset + tag_len];
+                        let iv = crate::encryption::derive_chunk_iv(base_iv, i)?;
+                        crate::encryption::decrypt_data(chunk, &ctx_arc.data_key_ctx, &iv, tag)
+                    })?;
+            }
+        } else {
+            // V1
+            let iv = ctx_arc.iv.as_ref().ok_or_else(|| {
+                CryptoTensorsError::Decryption("Missing iv for v1 decryption".to_string())
+            })?;
+            let tag = ctx_arc.tag.as_ref().ok_or_else(|| {
+                CryptoTensorsError::Decryption("Missing tag for v1 decryption".to_string())
+            })?;
+            crate::encryption::decrypt_data(buffer, &ctx_arc.data_key_ctx, iv, tag)?;
+        }
+        Ok(())
     }
 
     /// Encrypt data using the master key
@@ -684,18 +857,72 @@ impl SingleCryptor {
         &self,
         data: &[u8],
         master_key_ctx: &PreparedKeyContext,
+        chunk_size: Option<usize>,
     ) -> Result<(), CryptoTensorsError> {
         let data_key = Zeroizing::new(self.random_key()?);
         let data_key_ctx = prepare_key_context(&data_key, &self.enc_algo)?;
 
         let mut buffer = data.to_vec();
-        let (iv, tag) = encrypt_data(&mut buffer, &data_key_ctx)?;
-        self.iv
-            .set(BASE64.encode(&iv))
-            .map_err(|_| CryptoTensorsError::Encryption("Failed to set iv".to_string()))?;
-        self.tag
-            .set(BASE64.encode(&tag))
-            .map_err(|_| CryptoTensorsError::Encryption("Failed to set tag".to_string()))?;
+
+        let mut out_iv = None;
+        let mut out_tag = None;
+        let mut out_base_iv = None;
+        let mut out_tags = None;
+
+        if let Some(c_size) = chunk_size {
+            let aead_algo = data_key_ctx.algo.get_aead_algo();
+            let mut base_iv = vec![0u8; aead_algo.nonce_len()];
+            let rng = rand::SystemRandom::new();
+            rng.fill(&mut base_iv)
+                .map_err(|e| CryptoTensorsError::RandomGeneration(e.to_string()))?;
+
+            let chunk_count = (buffer.len() + c_size - 1) / c_size;
+            let mut all_tags =
+                vec![0u8; std::cmp::max(1, chunk_count) * data_key_ctx.algo.tag_len()];
+
+            if buffer.is_empty() {
+                let tag =
+                    crate::encryption::encrypt_data_with_iv(&mut [], &data_key_ctx, &base_iv)?;
+                all_tags[0..tag.len()].copy_from_slice(&tag);
+            } else {
+                let tags_res: Result<Vec<Vec<u8>>, CryptoTensorsError> = buffer
+                    .par_chunks_mut(c_size)
+                    .enumerate()
+                    .map(|(i, chunk)| {
+                        let chunk_iv = crate::encryption::derive_chunk_iv(&base_iv, i)?;
+                        crate::encryption::encrypt_data_with_iv(chunk, &data_key_ctx, &chunk_iv)
+                    })
+                    .collect();
+
+                let tags_vec = tags_res?;
+                all_tags.clear();
+                for tag in tags_vec {
+                    all_tags.extend_from_slice(&tag);
+                }
+            }
+
+            self.base_iv
+                .set(BASE64.encode(&base_iv))
+                .map_err(|_| CryptoTensorsError::Encryption("Failed to set base_iv".to_string()))?;
+            self.tags
+                .set(BASE64.encode(&all_tags))
+                .map_err(|_| CryptoTensorsError::Encryption("Failed to set tags".to_string()))?;
+
+            out_base_iv = Some(base_iv);
+            out_tags = Some(all_tags);
+        } else {
+            let (iv, tag) = encrypt_data(&mut buffer, &data_key_ctx)?;
+            self.iv
+                .set(BASE64.encode(&iv))
+                .map_err(|_| CryptoTensorsError::Encryption("Failed to set iv".to_string()))?;
+            self.tag
+                .set(BASE64.encode(&tag))
+                .map_err(|_| CryptoTensorsError::Encryption("Failed to set tag".to_string()))?;
+
+            out_iv = Some(iv);
+            out_tag = Some(tag);
+        }
+
         self.wrap_key(&data_key, master_key_ctx)?;
         self.buffer
             .set(Arc::new(buffer))
@@ -704,8 +931,10 @@ impl SingleCryptor {
         self.ctx
             .set(Arc::new(CryptoContext {
                 data_key_ctx,
-                iv,
-                tag,
+                iv: out_iv,
+                tag: out_tag,
+                base_iv: out_base_iv,
+                tags: out_tags,
                 data_key,
             }))
             .map_err(|_| {
@@ -781,8 +1010,10 @@ impl SingleCryptor {
             wrapped_key: OnceCell::new(),
             key_iv: OnceCell::new(),
             key_tag: OnceCell::new(),
-            iv: self.iv.clone(),     // Preserve data encryption IV (if set)
-            tag: self.tag.clone(),   // Preserve data encryption tag (if set)
+            iv: self.iv.clone(), // Preserve data encryption IV (if set, v1 format)
+            tag: self.tag.clone(), // Preserve data encryption tag (if set, v1 format)
+            base_iv: self.base_iv.clone(), // Preserve v2 base_iv
+            tags: self.tags.clone(), // Preserve v2 tags
             buffer: OnceCell::new(), // Clear buffer (master_key changed)
             ctx: self.ctx.clone(), // Preserve prepared context, it's valid regardless of master key
         };
@@ -816,6 +1047,8 @@ impl Clone for SingleCryptor {
             key_tag: self.key_tag.clone(),
             iv: self.iv.clone(),
             tag: self.tag.clone(),
+            base_iv: self.base_iv.clone(),
+            tags: self.tags.clone(),
             buffer: self.buffer.clone(),
             ctx: self.ctx.clone(),
         }
@@ -925,6 +1158,8 @@ pub struct CryptoTensors {
     policy: AccessPolicy,
     /// CryptoTensors version
     version: String,
+    /// Chunk size for chunked encryption data IV derivation (v2 format)
+    chunk_size: Option<usize>,
 }
 
 impl CryptoTensors {
@@ -996,13 +1231,25 @@ impl CryptoTensors {
         // Create signer
         let signer = HeaderSigner::new(&sign_key)?;
 
+        let version = config
+            .version
+            .clone()
+            .unwrap_or_else(|| CRYPTOTENSORS_VERSION_V2.to_string());
+
+        let chunk_size = if version == CRYPTOTENSORS_VERSION_V1 {
+            None
+        } else {
+            Some(config.chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE))
+        };
+
         Ok(Some(Self {
             cryptors,
             enc_key,
             sign_key,
             signer,
             policy: config.policy.clone().unwrap_or_default(),
-            version: CRYPTOTENSORS_VERSION.to_string(),
+            version,
+            chunk_size,
         }))
     }
 
@@ -1038,11 +1285,17 @@ impl CryptoTensors {
         new_metadata.remove("__policy__");
 
         // Add key material information
-        let key_material = serde_json::json!({
+        let mut key_material = serde_json::json!({
             "version": self.version,
             "enc": self.enc_key,
             "sign": self.sign_key
         });
+        if let Some(cs) = self.chunk_size {
+            key_material
+                .as_object_mut()
+                .unwrap()
+                .insert("chunk_size".to_string(), serde_json::json!(cs));
+        }
         let key_material_json = serde_json::to_string(&key_material)
             .map_err(|e| CryptoTensorsError::Encryption(e.to_string()))?;
         new_metadata.insert("__crypto_keys__".to_string(), key_material_json);
@@ -1239,9 +1492,13 @@ impl CryptoTensors {
             .get("version")
             .and_then(|v| v.as_str())
             .ok_or(CryptoTensorsError::MissingVersion)?;
-        if version != CRYPTOTENSORS_VERSION {
+        if version != CRYPTOTENSORS_VERSION_V1 && version != CRYPTOTENSORS_VERSION_V2 {
             return Err(CryptoTensorsError::UnsupportedVersion(version.to_string()));
         }
+        let chunk_size = key_materials
+            .get("chunk_size")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
         let mut enc_key = KeyMaterial::from_header(&key_materials["enc"])?;
         let mut sign_key = KeyMaterial::from_header(&key_materials["sign"])?;
 
@@ -1343,6 +1600,7 @@ impl CryptoTensors {
             sign_key,
             policy,
             version: version.to_string(),
+            chunk_size,
         }))
     }
 
@@ -1365,7 +1623,7 @@ impl CryptoTensors {
     ) -> Result<(), CryptoTensorsError> {
         match self.get(tensor_name) {
             Some(cryptor) => {
-                cryptor.decrypt_from_file(file, file_offset, len)?;
+                cryptor.decrypt_from_file(file, file_offset, len, self.chunk_size)?;
                 Ok(())
             }
             None => Ok(()),
@@ -1381,7 +1639,12 @@ impl CryptoTensors {
         data: &'a [u8],
     ) -> Result<&'a [u8], CryptoTensorsError> {
         match self.get(tensor_name) {
-            Some(cryptor) => cryptor.decrypt(data),
+            Some(cryptor) => {
+                cryptor.decrypt(data, self.chunk_size)?;
+                cryptor.buffer.get().map(|b| b.as_slice()).ok_or_else(|| {
+                    CryptoTensorsError::Decryption("Decrypted buffer not available".to_string())
+                })
+            }
             None => Ok(data),
         }
     }
@@ -1405,7 +1668,7 @@ impl CryptoTensors {
 
         for (name, cryptor) in &self.cryptors {
             if let Some(data) = get_data(name) {
-                cryptor.encrypt(&data, &master_key_ctx)?;
+                cryptor.encrypt(&data, &master_key_ctx, self.chunk_size)?;
             }
         }
         Ok(())

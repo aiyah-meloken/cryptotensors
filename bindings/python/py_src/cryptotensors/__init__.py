@@ -127,6 +127,8 @@ class SerializeCryptoConfig:
         sign_jku=None,
         policy=None,
         tensors=None,
+        chunk_size=None,
+        version=None,
     ):
         """
         Initialize SerializeCryptoConfig
@@ -140,6 +142,8 @@ class SerializeCryptoConfig:
             sign_jku (str, optional): Signing key JWK URL
             policy (dict, optional): Access policy {"local": "...", "remote": "..."}
             tensors (list, optional): List of tensor names to encrypt (None = all)
+            chunk_size (int, optional): Size in bytes for chunked encryption. If None, uses default 2MB.
+            version (str, optional): CryptoTensors format version ("1" or "2"). If None, uses default V2.
         """
         self.config = {
             "enc_key": enc_key,
@@ -150,6 +154,8 @@ class SerializeCryptoConfig:
             "sign_jku": sign_jku,
             "policy": policy,
             "tensors": tensors,
+            "chunk_size": chunk_size,
+            "version": version,
         }
         # Remove None values
         self.config = {k: v for k, v in self.config.items() if v is not None}

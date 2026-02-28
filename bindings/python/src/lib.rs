@@ -637,6 +637,16 @@ fn prepare_crypto(config: Option<PyBound<PyAny>>) -> PyResult<Option<SerializeCr
         ser_config.tensor_filter = Some(tensors_any.extract::<Vec<String>>()?);
     }
 
+    // Chunk size
+    if let Some(chunk_size) = config_dict.get_item("chunk_size")? {
+        ser_config.chunk_size = Some(chunk_size.extract::<usize>()?);
+    }
+
+    // Version
+    if let Some(version) = config_dict.get_item("version")? {
+        ser_config.version = Some(version.extract::<String>()?);
+    }
+
     Ok(Some(ser_config))
 }
 

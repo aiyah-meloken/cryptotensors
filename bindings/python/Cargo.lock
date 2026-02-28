@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "cryptotensors"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64",
  "hashbrown",
@@ -241,7 +241,7 @@ dependencies = [
 
 [[package]]
 name = "cryptotensors-python"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "cryptotensors",
  "memmap2",

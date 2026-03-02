@@ -76,7 +76,7 @@ def generate_test_keys(algorithm="aes256gcm"):
     return {"enc_key": enc_key, "sign_key": sign_key}
 
 
-def create_crypto_config(enc_key, sign_key, tensors=None, policy=None):
+def create_crypto_config(enc_key, sign_key, tensors=None, policy=None, **kwargs):
     """
     Build encryption configuration dictionary for serialize/serialize_file.
 
@@ -85,6 +85,7 @@ def create_crypto_config(enc_key, sign_key, tensors=None, policy=None):
         sign_key (dict): Signing key material.
         tensors (list, optional): List of tensor names to encrypt. If None, all are encrypted.
         policy (dict, optional): Access policy dictionary.
+        **kwargs: Additional configuration parameters (e.g., chunk_size, version).
 
     Returns:
         dict: Configuration dictionary compatible with CryptoTensors API.
@@ -97,4 +98,5 @@ def create_crypto_config(enc_key, sign_key, tensors=None, policy=None):
         config["tensors"] = tensors
     if policy is not None:
         config["policy"] = policy
+    config.update(kwargs)
     return config

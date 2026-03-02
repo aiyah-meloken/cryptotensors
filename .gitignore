@@ -1,6 +1,7 @@
 safetensors/target
 safetensors/**/Cargo.lock
 bindings/python/Cargo.lock
+*__pycache__*
 *.bin
 *.h5
 *.msgpack

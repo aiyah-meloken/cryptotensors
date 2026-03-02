@@ -146,10 +146,13 @@ The file format is the same as the safetensors format, with the following additi
       with `BEGIN` as the starting offset and `END` as the one-past offset (so total tensor byte size = `END - BEGIN`).
   - A special key `__metadata__` is allowed to contain free form string-to-string map. Arbitrary JSON is not allowed, all values must be strings.
   - **Cryptotensors add the following fields to the `__metadata__` section**:
-    - `__encryption__`: JSON string containing per-tensor encryption information (algorithm, nonce, encrytped data encryption key, etc.)
-    - `__crypto_keys__`: JSON string containing key material information in the format `{"version": "1", "enc": {...}, "sign": {...}}`, where `enc` and `sign` are the metadata of the master decryption key and signing key respectively. No secrets are stored in this field, and the metadata is used to retrieve the keys from the key providers.
+    - `__encryption__`: JSON string containing per-tensor encryption information (algorithm, IVs, tags, wrapped keys, etc.). The format of this field depends on the `version` specified in `__crypto_keys__`.
+    - `__crypto_keys__`: JSON string containing key material information in the format `{"version": "1"|"2", "chunk_size": 2097152, "enc": {...}, "sign": {...}}`. `version` "1" uses monolithic encryption, while "2" uses chunked encryption. `chunk_size` is only present in version "2". No secrets are stored in this field, and the metadata is used to retrieve the keys from the key providers.
     - `__signature__`: Base64-encoded Ed25519 signature of the file header (excluding the signature itself) for integrity verification
     - `__policy__`: JSON string containing access control policy in Rego format
+  
+  For detailed format specifications and the differences between v1 and v2, please refer to [FORMAT.md](FORMAT.md).
+
 - Rest of the file: byte-buffer.
 
 ### Notes & Benefits

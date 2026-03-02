@@ -9,6 +9,7 @@ def test_serialize_crypto_config():
         sign_kid="my-sign",
         policy={"local": "package model\nallow = true"},
         tensors=["weight", "bias"],
+        chunk_size=1048576,
     )
 
     config_dict = config.to_dict()
@@ -16,6 +17,7 @@ def test_serialize_crypto_config():
     assert config_dict["sign_kid"] == "my-sign"
     assert "policy" in config_dict
     assert config_dict["tensors"] == ["weight", "bias"]
+    assert config_dict["chunk_size"] == 1048576
 
 
 def test_serialize_crypto_config_minimal():

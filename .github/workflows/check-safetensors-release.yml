@@ -45,8 +45,10 @@ jobs:
 
       - name: Get latest safetensors release
         id: latest_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          LATEST_RELEASE=$(curl -s https://api.github.com/repos/huggingface/safetensors/releases/latest | jq -r '.tag_name // .name' | sed 's/^v//')
+          LATEST_RELEASE=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/huggingface/safetensors/releases/latest | jq -r '.tag_name // .name' | sed 's/^v//')
           if [ -z "$LATEST_RELEASE" ] || [ "$LATEST_RELEASE" = "null" ]; then
             echo "Failed to get latest release"
             exit 1
@@ -96,8 +98,10 @@ jobs:
       - name: Get release details
         if: steps.version_check.outputs.needs_update == 'true' || github.event.inputs.test_mode == 'true'
         id: release_details
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          RELEASE_DATA=$(curl -s https://api.github.com/repos/huggingface/safetensors/releases/latest)
+          RELEASE_DATA=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/huggingface/safetensors/releases/latest)
           RELEASE_URL=$(echo "$RELEASE_DATA" | jq -r '.html_url')
           RELEASE_BODY=$(echo "$RELEASE_DATA" | jq -r '.body' | head -n 50)
           RELEASE_DATE=$(echo "$RELEASE_DATA" | jq -r '.published_at')
